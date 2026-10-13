@@ -1,4 +1,4 @@
-
+﻿
 const { app, BrowserWindow, ipcMain } = require("electron");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
@@ -60,7 +60,7 @@ async function startStorageServer() {
   const serverPath = path.join(ROOT, "server", "server.js");
 
   if (!fs.existsSync(serverPath)) {
-    console.warn("Sakura storage server file was not found.");
+    console.warn("Fufuu storage server file was not found.");
     return;
   }
 
@@ -86,8 +86,8 @@ function createAvatarWindow() {
   }
 
   avatarWindow = new BrowserWindow({
-    width: 210,
-    height: 225,
+    width: 360,
+    height: 520,
     useContentSize: true,
     transparent: true,
     backgroundColor: "#00000000",
@@ -137,7 +137,7 @@ function openChatWindow() {
     minWidth: 760,
     minHeight: 600,
     backgroundColor: "#15121d",
-    title: "Sakura",
+    title: "Fufuu",
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
@@ -167,7 +167,7 @@ app.whenReady().then(async () => {
     await startVite();
     createAvatarWindow();
   } catch (error) {
-    console.error("Sakura desktop startup failed:", error);
+    console.error("Fufuu desktop startup failed:", error);
     app.quit();
   }
 });
@@ -185,5 +185,18 @@ app.on("before-quit", () => {
 app.on("window-all-closed", () => {
   if (!quitting && process.platform !== "darwin") {
     app.quit();
+  }
+});
+
+
+// Fufuu display-mode synchronization
+let currentDisplayMode = "2d";
+ipcMain.on("fufuu:set-display-mode", (_event, mode) => {
+  if (mode !== "2d" && mode !== "3d") return;
+  currentDisplayMode = mode;
+  for (const win of [avatarWindow, chatWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("fufuu:display-mode", currentDisplayMode);
+    }
   }
 });

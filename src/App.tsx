@@ -1,5 +1,4 @@
-
-import { useCallback, useEffect, useRef, useState } from "react";
+﻿import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 
 const MODEL = "qwen2.5-coder:3b";
@@ -7,6 +6,8 @@ const VISION_MODEL = "qwen2.5vl:3b";
 const OLLAMA_URL = "http://localhost:11434/api/chat";
 const STORAGE_URL = "http://127.0.0.1:4317/api/conversations";
 const CONVERSATION_ID = "sakura-main";
+
+type DisplayMode = "2d" | "3d";
 
 type Message = {
   role: "system" | "user" | "assistant";
@@ -34,7 +35,7 @@ type ConversationStore = {
 const INITIAL_GREETING: Message = {
   role: "assistant",
   content:
-    "Hey! I'm Sakura 🌸 I'm here, bro. I run locally on your PC, and we can figure things out together. Capture your screen whenever you want me to look at something.",
+    "Hey! I'm Fufuu 🌸 I'm here, bro. I run locally on your PC, and we can figure things out together. Capture your screen whenever you want me to look at something.",
 };
 
 export default function App() {
@@ -46,8 +47,36 @@ export default function App() {
   const [screenImage, setScreenImage] = useState<string | null>(null);
   const [screenPreview, setScreenPreview] = useState<string | null>(null);
 
+  const [displayMode, setDisplayMode] = useState<DisplayMode>(() => {
+    return window.localStorage.getItem("fufuu-display-mode") === "3d"
+      ? "3d"
+      : "2d";
+  });
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Keep browser storage, browser contexts, and the Electron avatar in sync.
+  useEffect(() => {
+    window.localStorage.setItem("fufuu-display-mode", displayMode);
+
+    const channel = new BroadcastChannel("fufuu-display-mode");
+    channel.postMessage(displayMode);
+    channel.close();
+
+    window.sakuraDesktop?.setDisplayMode(displayMode);
+  }, [displayMode]);
+
+  // Receive mode changes initiated by the floating avatar or Electron.
+  useEffect(() => {
+    const unsubscribe = window.sakuraDesktop?.onDisplayMode((mode) => {
+      setDisplayMode(mode);
+    });
+
+    return () => {
+      unsubscribe?.();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -104,7 +133,7 @@ export default function App() {
           setError(
             loadError instanceof Error
               ? `Storage connection failed: ${loadError.message}`
-              : "Couldn't connect to Sakura's storage server.",
+              : "Couldn't connect to Fufuu's storage server.",
           );
         }
       }
@@ -157,7 +186,7 @@ export default function App() {
 
       const updatedConversation: StoredConversation = {
         id: CONVERSATION_ID,
-        title: "Sakura",
+        title: "Fufuu",
         messages: savedMessages,
         updatedAt: new Date().toISOString(),
       };
@@ -195,7 +224,7 @@ export default function App() {
 
     if (!navigator.mediaDevices?.getDisplayMedia) {
       setError(
-        "Screen capture is unavailable. Open Sakura using its localhost Vite URL in a supported browser.",
+        "Screen capture is unavailable. Open Fufuu using its localhost Vite URL in a supported browser.",
       );
       return;
     }
@@ -318,13 +347,17 @@ export default function App() {
 
     // Add streamed output to the same assistant message.
     const updateAssistantMessage = (chunk: string) => {
+      const previousText = assistantText;
       assistantText += chunk;
 
       setMessages((current) => {
         const next = [...current];
         const last = next[next.length - 1];
 
-        if (last?.role === "assistant" && last.content === assistantText.slice(0, assistantText.length - chunk.length)) {
+        if (
+          last?.role === "assistant" &&
+          last.content === previousText
+        ) {
           next[next.length - 1] = {
             ...last,
             content: assistantText,
@@ -354,7 +387,7 @@ export default function App() {
             {
               role: "system",
               content: [
-                "You are Sakura, the user's friendly, thoughtful local AI companion.",
+                "You are Fufuu, the user's friendly, thoughtful local AI companion.",
                 "Speak naturally, warmly, and directly.",
                 "You run locally through Ollama on the user's computer.",
                 "Never claim to see the screen unless an image is attached to the current message.",
@@ -462,7 +495,7 @@ export default function App() {
       const message =
         sendError instanceof Error
           ? sendError.message
-          : "Something went wrong while talking to Sakura.";
+          : "Something went wrong while talking to Fufuu.";
 
       setError(
         message.includes("Failed to fetch")
@@ -493,7 +526,7 @@ export default function App() {
     if (busy || !storageReady) return;
 
     const confirmed = window.confirm(
-      "Clear Sakura's saved conversation? This cannot be undone.",
+      "Clear Fufuu's saved conversation? This cannot be undone.",
     );
 
     if (!confirmed) return;
@@ -527,7 +560,7 @@ export default function App() {
             </div>
 
             <div>
-              <h1>Sakura</h1>
+              <h1>Fufuu</h1>
               <p>
                 <span className="status-dot" />
                 Local companion
@@ -536,6 +569,30 @@ export default function App() {
           </div>
 
           <div className="header-actions">
+            <div
+              className="display-mode-control"
+              role="group"
+              aria-label="Character display mode"
+            >
+              <button
+                type="button"
+                className={`mode-option ${displayMode === "2d" ? "active" : ""}`}
+                aria-pressed={displayMode === "2d"}
+                onClick={() => setDisplayMode("2d")}
+              >
+                2D
+              </button>
+
+              <button
+                type="button"
+                className={`mode-option ${displayMode === "3d" ? "active" : ""}`}
+                aria-pressed={displayMode === "3d"}
+                onClick={() => setDisplayMode("3d")}
+              >
+                3D
+              </button>
+            </div>
+
             <span className="local-badge">LOCAL AI</span>
 
             <button
@@ -560,7 +617,7 @@ export default function App() {
         <section className="messages" aria-label="Conversation">
           {!storageReady && (
             <div className="system-message">
-              Connecting to Sakura's local memory...
+              Connecting to Fufuu's local memory...
             </div>
           )}
 
@@ -581,7 +638,7 @@ export default function App() {
 
               <div className="message-content">
                 <span className="message-author">
-                  {message.role === "user" ? "You" : "Sakura"}
+                  {message.role === "user" ? "You" : "Fufuu"}
                 </span>
 
                 <p>{message.content}</p>
@@ -594,7 +651,7 @@ export default function App() {
               <span />
               <span />
               <span />
-              <small>Sakura is thinking...</small>
+              <small>Fufuu is thinking...</small>
             </div>
           )}
 
@@ -626,7 +683,7 @@ export default function App() {
             <div className="screen-preview">
               <img
                 src={screenPreview}
-                alt="Screenshot attached for Sakura"
+                alt="Screenshot attached for Fufuu"
               />
 
               <div className="screen-preview-details">
@@ -661,10 +718,10 @@ export default function App() {
                 void sendMessage();
               }
             }}
-            placeholder="Talk to Sakura..."
+            placeholder="Talk to Fufuu..."
             rows={2}
             disabled={busy || !storageReady}
-            aria-label="Message Sakura"
+            aria-label="Message Fufuu"
           />
 
           <div className="composer-footer">
@@ -692,13 +749,13 @@ export default function App() {
                 (!input.trim() && !screenImage)
               }
             >
-              {busy ? "Thinking..." : "Send ↗"}
+              {busy ? "Thinking..." : "Send ➤"}
             </button>
           </div>
         </form>
 
         <footer className="app-footer">
-          <span>Sakura · Your PC, your data</span>
+          <span>Fufuu · Your PC, your data</span>
           <span>Powered by Ollama</span>
         </footer>
       </section>
