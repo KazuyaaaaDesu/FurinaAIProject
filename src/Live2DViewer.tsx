@@ -7,6 +7,7 @@ import "./Live2DViewer.css";
 Live2DModel.registerTicker(PIXI.Ticker);
 
 const MODEL_URL = "/models/furina-live2d/Furina.model3.json";
+const EMOTION_CHANNEL = "fufuu-avatar-emotion";
 
 const EXPRESSION_KEYS: Record<string, number> = {
   "1": 0,
@@ -17,6 +18,18 @@ const EXPRESSION_KEYS: Record<string, number> = {
   "6": 5,
   "7": 6,
 };
+
+const EXPRESSION_EMOTIONS = [
+  "neutral",
+  "happy",
+  "pout",
+  "shy",
+  "smug",
+  "surprised",
+  "sparkle",
+] as const;
+
+type FufuuEmotion = (typeof EXPRESSION_EMOTIONS)[number];
 
 interface ExpressionSetting {
   Name?: string;
@@ -37,13 +50,13 @@ interface CubismParameterAPI {
   setParameterValueById?: (
     id: string,
     value: number,
-    weight?: number
+    weight?: number,
   ) => void;
   getParameterIndex?: (id: string) => number;
   setParameterValueByIndex?: (
     index: number,
     value: number,
-    weight?: number
+    weight?: number,
   ) => void;
 }
 
@@ -54,7 +67,7 @@ function clamp(value: number, min: number, max: number) {
 function setParameter(
   core: CubismParameterAPI,
   id: string,
-  value: number
+  value: number,
 ) {
   try {
     if (typeof core.setParameterValueById === "function") {
@@ -78,21 +91,12 @@ function setParameter(
 }
 
 function getExpressions(settings: unknown): ExpressionSetting[] {
-  if (!settings || typeof settings !== "object") {
-    return [];
-  }
+  if (!settings || typeof settings !== "object") return [];
 
   const value = settings as CubismSettings;
 
-  // Most parsed settings expose a lowercase `expressions` property.
-  if (Array.isArray(value.expressions)) {
-    return value.expressions;
-  }
-
-  // Also support the original model3 JSON naming.
-  if (Array.isArray(value.Expressions)) {
-    return value.Expressions;
-  }
+  if (Array.isArray(value.expressions)) return value.expressions;
+  if (Array.isArray(value.Expressions)) return value.Expressions;
 
   if (Array.isArray(value.FileReferences?.Expressions)) {
     return value.FileReferences.Expressions;
@@ -102,15 +106,22 @@ function getExpressions(settings: unknown): ExpressionSetting[] {
 }
 
 function getExpressionName(
-  expression: ExpressionSetting
+  expression: ExpressionSetting,
 ): string | undefined {
   return expression.Name ?? expression.name;
 }
 
 function getExpressionFile(
-  expression: ExpressionSetting
+  expression: ExpressionSetting,
 ): string | undefined {
   return expression.File ?? expression.file;
+}
+
+function isFufuuEmotion(value: unknown): value is FufuuEmotion {
+  return (
+    typeof value === "string" &&
+    EXPRESSION_EMOTIONS.includes(value as FufuuEmotion)
+  );
 }
 
 export default function Live2DViewer() {
@@ -129,6 +140,8 @@ export default function Live2DViewer() {
     let pointerTargetY = 0;
     let pointerX = 0;
     let pointerY = 0;
+    let pendingExpressionIndex: number | null = null;
+    let lastExpressionIndex: number | null = null;
 
     let resizeObserver: ResizeObserver | null = null;
     let tickerCallback: ((delta: number) => void) | null = null;
@@ -161,7 +174,6 @@ export default function Live2DViewer() {
       const height = Math.max(host.clientHeight, 1);
 
       app.renderer.resize(width, height);
-
       model.scale.set(1);
 
       const bounds = model.getLocalBounds();
@@ -178,7 +190,7 @@ export default function Live2DViewer() {
 
       const scale = Math.min(
         (width * 0.94) / bounds.width,
-        (height * 0.86) / bounds.height
+        (height * 0.86) / bounds.height,
       );
 
       model.scale.set(scale);
@@ -196,13 +208,13 @@ export default function Live2DViewer() {
       pointerTargetX = clamp(
         ((event.clientX - rect.left) / rect.width - 0.5) * 2,
         -1,
-        1
+        1,
       );
 
       pointerTargetY = clamp(
         ((event.clientY - rect.top) / rect.height - 0.5) * 2,
         -1,
-        1
+        1,
       );
     }
 
@@ -212,68 +224,87 @@ export default function Live2DViewer() {
     }
 
     async function activateExpression(index: number) {
-      if (!model || disposed || model.destroyed) return;
+      if (
+        !model ||
+        disposed ||
+        model.destroyed ||
+        index < 0 ||
+        index >= EXPRESSION_EMOTIONS.length
+      ) {
+        return;
+      }
 
       const settings = model.internalModel.settings as unknown as CubismSettings;
       const expressions = getExpressions(settings);
       const expression = expressions[index];
 
       if (!expression) {
-        console.warn(
-          `[Fufuu] No expression at index ${index}.`,
-          "Parsed settings keys:",
-          settings && typeof settings === "object"
-            ? Object.keys(settings)
-            : [],
-          "Settings:",
-          settings
-        );
+        console.warn(`[Fufuu] No expression at index ${index}.`, settings);
         return;
       }
 
       const name = getExpressionName(expression);
-      const file = getExpressionFile(expression);
-
-      console.info(
-        `[Fufuu] Activating expression ${index + 1}:`,
-        { name, file, expression }
-      );
 
       try {
-        // Try the configured expression name first.
+        let activated = false;
+
         if (name) {
           const byName = await model.expression(name);
 
           if (disposed) return;
-
-          if (byName) {
-            console.info(`[Fufuu] Expression activated: ${name}`);
-            return;
-          }
+          activated = Boolean(byName);
         }
 
-        // Some library versions accept a numeric index instead.
-        const byIndex = await model.expression(index);
+        if (!activated) {
+          const byIndex = await model.expression(index);
 
-        if (disposed) return;
+          if (disposed) return;
+          activated = Boolean(byIndex);
+        }
 
-        if (byIndex) {
-          console.info(`[Fufuu] Expression ${index + 1} activated by index.`);
-        } else {
-          console.warn(
-            `[Fufuu] Could not activate expression ${index + 1}.`,
-            "Check that its expression file exists and loads correctly."
+        if (activated) {
+          lastExpressionIndex = index;
+          console.info(
+            `[Fufuu] Expression activated: ${name ?? index}`,
           );
+        } else {
+          console.warn(`[Fufuu] Could not activate expression ${index + 1}.`);
         }
       } catch (error) {
         if (!disposed) {
           console.error(
             `[Fufuu] Error activating expression ${index + 1}:`,
-            error
+            error,
           );
         }
       }
     }
+
+    function handleEmotionMessage(event: MessageEvent<unknown>) {
+      if (disposed || !isFufuuEmotion(event.data)) return;
+
+      const index = EXPRESSION_EMOTIONS.indexOf(event.data);
+
+      console.info("[Fufuu] Received AI emotion:", event.data);
+
+      // Avoid repeatedly reloading the expression that's already active.
+      if (index === lastExpressionIndex) return;
+
+      // Keep only the latest emotion if the model hasn't loaded yet.
+      if (!model || model.destroyed) {
+        pendingExpressionIndex = index;
+        return;
+      }
+
+      void activateExpression(index);
+    }
+
+    const emotionChannel =
+      typeof BroadcastChannel !== "undefined"
+        ? new BroadcastChannel(EMOTION_CHANNEL)
+        : null;
+
+    emotionChannel?.addEventListener("message", handleEmotionMessage);
 
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target;
@@ -323,22 +354,16 @@ export default function Live2DViewer() {
         const expressions = getExpressions(settings);
 
         console.info("[Fufuu] Model loaded.");
-        console.info("[Fufuu] Settings keys:", Object.keys(settings ?? {}));
-        console.info("[Fufuu] Parsed settings:", settings);
         console.info("[Fufuu] Expressions found:", expressions);
 
         if (expressions.length === 0) {
-          console.error(
-            "[Fufuu] No expressions found in the parsed settings. " +
-              "Verify FileReferences.Expressions in the model JSON " +
-              "and check which settings file the browser is loading."
-          );
+          console.error("[Fufuu] No expressions found in model settings.");
         } else {
           expressions.forEach((expression, index) => {
             console.info(
               `[Fufuu] Expression ${index + 1}:`,
               getExpressionName(expression),
-              getExpressionFile(expression)
+              getExpressionFile(expression),
             );
           });
         }
@@ -360,20 +385,20 @@ export default function Live2DViewer() {
           if (rect.width > 0 && rect.height > 0) {
             model.focus(
               rect.left + rect.width * (0.5 + pointerX * 0.35),
-              rect.top + rect.height * (0.5 + pointerY * 0.25)
+              rect.top + rect.height * (0.5 + pointerY * 0.25),
             );
           }
 
           setParameter(
             core,
             "ParamBreath",
-            0.5 + Math.sin(animationTime * 1.15) * 0.1
+            0.5 + Math.sin(animationTime * 1.15) * 0.1,
           );
 
           setParameter(
             core,
             "ParamBodyAngleZ",
-            Math.sin(animationTime * 0.42)
+            Math.sin(animationTime * 0.42),
           );
         };
 
@@ -387,6 +412,12 @@ export default function Live2DViewer() {
           stageChildren: app.stage.children.length,
           expressionShortcuts: "1–7",
         });
+
+        if (pendingExpressionIndex !== null) {
+          const pendingIndex = pendingExpressionIndex;
+          pendingExpressionIndex = null;
+          void activateExpression(pendingIndex);
+        }
       } catch (error) {
         console.error("[Fufuu] Model loading failed:", error);
 
@@ -404,6 +435,9 @@ export default function Live2DViewer() {
 
       resizeObserver?.disconnect();
       resizeObserver = null;
+
+      emotionChannel?.removeEventListener("message", handleEmotionMessage);
+      emotionChannel?.close();
 
       canvas.removeEventListener("pointermove", updatePointer);
       canvas.removeEventListener("pointerleave", releasePointer);
@@ -438,10 +472,7 @@ export default function Live2DViewer() {
 
   return (
     <div className="fufuu-live2d-viewer">
-      <div
-        ref={containerRef}
-        className="fufuu-live2d-canvas-host"
-      />
+      <div ref={containerRef} className="fufuu-live2d-canvas-host" />
 
       {status && (
         <div
