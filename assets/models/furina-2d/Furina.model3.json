@@ -1,28 +1,59 @@
+
 {
-	"Version": 3,
-	"FileReferences": {
-		"Moc": "Furina.moc3",
-		"Textures": [
-			"Furina.8192/texture_00.png"
-		],
-		"Physics": "Furina.physics3.json",
-		"DisplayInfo": "Furina.cdi3.json"
-	},
-	"Groups": [
-		{
-			"Target": "Parameter",
-			"Name": "EyeBlink",
-			"Ids": [
-				"ParamEyeLOpen",
-				"ParamEyeROpen"
-			]
-		},
-		{
-			"Target": "Parameter",
-			"Name": "LipSync",
-			"Ids": [
-				"ParamMouthForm"
-			]
-		}
-	]
+  "Version": 3,
+  "FileReferences": {
+    "Moc": "Furina.moc3",
+    "Textures": [
+      "Furina.8192/texture_00.png"
+    ],
+    "Physics": "Furina.physics3.json",
+    "DisplayInfo": "Furina.cdi3.json",
+    "Expressions": [
+      {
+        "Name": "Neutral",
+        "File": "exp/-_-.exp3.json"
+      },
+      {
+        "Name": "Happy",
+        "File": "exp/0_0.exp3.json"
+      },
+      {
+        "Name": "Pout",
+        "File": "exp/BuOu.exp3.json"
+      },
+      {
+        "Name": "Shy",
+        "File": "exp/HaiXiu.exp3.json"
+      },
+      {
+        "Name": "Smug",
+        "File": "exp/HeiLian.exp3.json"
+      },
+      {
+        "Name": "Surprised",
+        "File": "exp/O.exp3.json"
+      },
+      {
+        "Name": "Sparkle",
+        "File": "exp/XingXing.exp3.json"
+      }
+    ]
+  },
+  "Groups": [
+    {
+      "Target": "Parameter",
+      "Name": "EyeBlink",
+      "Ids": [
+        "ParamEyeLOpen",
+        "ParamEyeROpen"
+      ]
+    },
+    {
+      "Target": "Parameter",
+      "Name": "LipSync",
+      "Ids": [
+        "ParamMouthForm"
+      ]
+    }
+  ]
 }

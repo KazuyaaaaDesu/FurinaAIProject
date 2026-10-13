@@ -85,27 +85,31 @@ function createAvatarWindow() {
     return;
   }
 
-  avatarWindow = new BrowserWindow({
-    width: 360,
-    height: 520,
-    useContentSize: true,
-    transparent: true,
-    backgroundColor: "#00000000",
-    frame: false,
-    resizable: false,
-    maximizable: false,
-    minimizable: false,
-    fullscreenable: false,
-    alwaysOnTop: true,
-    skipTaskbar: true,
-    hasShadow: false,
-    show: false,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.cjs"),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
+  
+    avatarWindow = new BrowserWindow({
+        width: 360,
+        height: 520,
+        minWidth: 240,
+        minHeight: 320,
+        useContentSize: true,
+        transparent: true,
+        backgroundColor: "#00000000",
+        frame: false,
+        resizable: true,
+        maximizable: false,
+        minimizable: false,
+        fullscreenable: false,
+        alwaysOnTop: true,
+        skipTaskbar: true,
+        hasShadow: false,
+        show: false,
+        webPreferences: {
+            preload: path.join(__dirname, "preload.cjs"),
+            contextIsolation: true,
+            nodeIntegration: false,
+        },
+    });
+
 
   avatarWindow.setAlwaysOnTop(true, "screen-saver");
   avatarWindow.setVisibleOnAllWorkspaces(true, {

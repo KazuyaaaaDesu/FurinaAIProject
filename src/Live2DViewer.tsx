@@ -1,7 +1,7 @@
-﻿import { useEffect, useRef, useState } from "react";
+﻿
+import { useEffect, useRef, useState } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
-
 import "./Live2DViewer.css";
 
 Live2DModel.registerTicker(PIXI.Ticker);
@@ -18,28 +18,43 @@ const EXPRESSION_KEYS: Record<string, number> = {
   "7": 6,
 };
 
+interface ExpressionSetting {
+  Name?: string;
+  File?: string;
+  name?: string;
+  file?: string;
+}
+
+interface CubismSettings {
+  expressions?: ExpressionSetting[];
+  Expressions?: ExpressionSetting[];
+  FileReferences?: {
+    Expressions?: ExpressionSetting[];
+  };
+}
+
 interface CubismParameterAPI {
   setParameterValueById?: (
     id: string,
     value: number,
-    weight?: number,
+    weight?: number
   ) => void;
-
-  getParameterValueById?: (id: string) => number;
-
   getParameterIndex?: (id: string) => number;
-
   setParameterValueByIndex?: (
     index: number,
     value: number,
-    weight?: number,
+    weight?: number
   ) => void;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
 }
 
 function setParameter(
   core: CubismParameterAPI,
   id: string,
-  value: number,
+  value: number
 ) {
   try {
     if (typeof core.setParameterValueById === "function") {
@@ -57,9 +72,45 @@ function setParameter(
         core.setParameterValueByIndex(index, value);
       }
     }
-  } catch {
-    // Some model runtimes expose different parameter APIs.
+  } catch (error) {
+    console.debug(`[Fufuu] Could not set parameter ${id}:`, error);
   }
+}
+
+function getExpressions(settings: unknown): ExpressionSetting[] {
+  if (!settings || typeof settings !== "object") {
+    return [];
+  }
+
+  const value = settings as CubismSettings;
+
+  // Most parsed settings expose a lowercase `expressions` property.
+  if (Array.isArray(value.expressions)) {
+    return value.expressions;
+  }
+
+  // Also support the original model3 JSON naming.
+  if (Array.isArray(value.Expressions)) {
+    return value.Expressions;
+  }
+
+  if (Array.isArray(value.FileReferences?.Expressions)) {
+    return value.FileReferences.Expressions;
+  }
+
+  return [];
+}
+
+function getExpressionName(
+  expression: ExpressionSetting
+): string | undefined {
+  return expression.Name ?? expression.name;
+}
+
+function getExpressionFile(
+  expression: ExpressionSetting
+): string | undefined {
+  return expression.File ?? expression.file;
 }
 
 export default function Live2DViewer() {
@@ -72,14 +123,15 @@ export default function Live2DViewer() {
     if (!container) return;
 
     let disposed = false;
-    let rendererDestroyed = false;
     let model: Live2DModel | null = null;
-    let elapsed = 0;
-    let blinkTimer = 0;
-    let nextBlink = 3.5;
-    let mouseX = 0;
-    let mouseY = 0;
-    let currentExpression = -1;
+    let animationTime = 0;
+    let pointerTargetX = 0;
+    let pointerTargetY = 0;
+    let pointerX = 0;
+    let pointerY = 0;
+
+    let resizeObserver: ResizeObserver | null = null;
+    let tickerCallback: ((delta: number) => void) | null = null;
 
     const app = new PIXI.Application({
       width: Math.max(container.clientWidth, 1),
@@ -92,7 +144,6 @@ export default function Live2DViewer() {
     });
 
     const canvas = app.view as HTMLCanvasElement;
-
     canvas.style.width = "100%";
     canvas.style.height = "100%";
     canvas.style.display = "block";
@@ -101,15 +152,17 @@ export default function Live2DViewer() {
 
     container.appendChild(canvas);
 
-    console.log("[Fufuu Live2D] Viewer initialized.");
+    function fitModel() {
+      const host = containerRef.current;
 
-    const fitModel = () => {
-      if (!model || disposed || rendererDestroyed) return;
+      if (disposed || !host || !model || model.destroyed) return;
 
-      const width = Math.max(container.clientWidth, 1);
-      const height = Math.max(container.clientHeight, 1);
+      const width = Math.max(host.clientWidth, 1);
+      const height = Math.max(host.clientHeight, 1);
 
       app.renderer.resize(width, height);
+
+      model.scale.set(1);
 
       const bounds = model.getLocalBounds();
 
@@ -119,59 +172,110 @@ export default function Live2DViewer() {
         bounds.width <= 0 ||
         bounds.height <= 0
       ) {
-        console.warn("[Fufuu Live2D] Invalid model bounds.", bounds);
+        console.warn("[Fufuu] Model bounds are not ready:", bounds);
         return;
       }
 
       const scale = Math.min(
         (width * 0.94) / bounds.width,
-        (height * 0.86) / bounds.height,
+        (height * 0.86) / bounds.height
       );
 
       model.scale.set(scale);
       model.position.set(width / 2, height / 2 + height * 0.015);
       model.visible = true;
       model.renderable = true;
+    }
 
-      console.log("[Fufuu Live2D] Model fitted.", {
-        width,
-        height,
-        scale,
-      });
-    };
+    function updatePointer(event: PointerEvent) {
+      if (!model || model.destroyed) return;
 
-    const resizeObserver = new ResizeObserver(() => {
-      fitModel();
-    });
-
-    resizeObserver.observe(container);
-
-    const handlePointerMove = (event: PointerEvent) => {
       const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
 
-      if (rect.width <= 0 || rect.height <= 0) return;
-
-      mouseX = ((event.clientX - rect.left) / rect.width - 0.5) * 2;
-      mouseY = ((event.clientY - rect.top) / rect.height - 0.5) * 2;
-
-      // Smoothly make Furina look toward the cursor.
-      model?.focus(
-        event.clientX - rect.left,
-        event.clientY - rect.top,
+      pointerTargetX = clamp(
+        ((event.clientX - rect.left) / rect.width - 0.5) * 2,
+        -1,
+        1
       );
-    };
 
-    const handlePointerLeave = () => {
-      mouseX = 0;
-      mouseY = 0;
-    };
+      pointerTargetY = clamp(
+        ((event.clientY - rect.top) / rect.height - 0.5) * 2,
+        -1,
+        1
+      );
+    }
 
-    canvas.addEventListener("pointermove", handlePointerMove);
-    canvas.addEventListener("pointerleave", handlePointerLeave);
+    function releasePointer() {
+      pointerTargetX = 0;
+      pointerTargetY = 0;
+    }
 
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!model || disposed) return;
+    async function activateExpression(index: number) {
+      if (!model || disposed || model.destroyed) return;
 
+      const settings = model.internalModel.settings as unknown as CubismSettings;
+      const expressions = getExpressions(settings);
+      const expression = expressions[index];
+
+      if (!expression) {
+        console.warn(
+          `[Fufuu] No expression at index ${index}.`,
+          "Parsed settings keys:",
+          settings && typeof settings === "object"
+            ? Object.keys(settings)
+            : [],
+          "Settings:",
+          settings
+        );
+        return;
+      }
+
+      const name = getExpressionName(expression);
+      const file = getExpressionFile(expression);
+
+      console.info(
+        `[Fufuu] Activating expression ${index + 1}:`,
+        { name, file, expression }
+      );
+
+      try {
+        // Try the configured expression name first.
+        if (name) {
+          const byName = await model.expression(name);
+
+          if (disposed) return;
+
+          if (byName) {
+            console.info(`[Fufuu] Expression activated: ${name}`);
+            return;
+          }
+        }
+
+        // Some library versions accept a numeric index instead.
+        const byIndex = await model.expression(index);
+
+        if (disposed) return;
+
+        if (byIndex) {
+          console.info(`[Fufuu] Expression ${index + 1} activated by index.`);
+        } else {
+          console.warn(
+            `[Fufuu] Could not activate expression ${index + 1}.`,
+            "Check that its expression file exists and loads correctly."
+          );
+        }
+      } catch (error) {
+        if (!disposed) {
+          console.error(
+            `[Fufuu] Error activating expression ${index + 1}:`,
+            error
+          );
+        }
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
       const target = event.target;
 
       if (
@@ -182,40 +286,23 @@ export default function Live2DViewer() {
         return;
       }
 
-      if (event.key === "Escape") {
-        currentExpression = -1;
-        console.log(`[Fufuu Live2D] Expression reset (active: ${currentExpression})`);
-        return;
-      }
-
       const expressionIndex = EXPRESSION_KEYS[event.key];
 
       if (expressionIndex === undefined) return;
 
-      currentExpression = expressionIndex;
+      void activateExpression(expressionIndex);
+    }
 
-      void model.expression(expressionIndex).then((success) => {
-        if (disposed) return;
-
-        if (success) {
-          console.log(
-            `[Fufuu Live2D] Expression ${expressionIndex + 1} activated. (Current: ${currentExpression})`,
-          );
-        } else {
-          console.warn(
-            `[Fufuu Live2D] Expression ${expressionIndex + 1} is unavailable.`,
-          );
-        }
-      }).catch((error: unknown) => {
-        console.warn("[Fufuu Live2D] Expression failed.", error);
-      });
-    };
-
+    canvas.addEventListener("pointermove", updatePointer);
+    canvas.addEventListener("pointerleave", releasePointer);
     window.addEventListener("keydown", handleKeyDown);
+
+    resizeObserver = new ResizeObserver(() => fitModel());
+    resizeObserver.observe(container);
 
     async function loadModel() {
       try {
-        console.log("[Fufuu Live2D] Loading:", MODEL_URL);
+        console.info("[Fufuu] Loading model:", MODEL_URL);
 
         const loadedModel = await Live2DModel.from(MODEL_URL, {
           autoInteract: false,
@@ -228,103 +315,84 @@ export default function Live2DViewer() {
 
         model = loadedModel;
         model.anchor.set(0.5, 0.5);
-        model.visible = true;
-        model.renderable = true;
-
         app.stage.addChild(model);
+
         fitModel();
 
-        // Access the Cubism parameter API through a typed compatibility
-        // layer because this package declares coreModel as `object`.
-        const core = model.internalModel.coreModel as CubismParameterAPI;
+        const settings = model.internalModel.settings as unknown as CubismSettings;
+        const expressions = getExpressions(settings);
 
-        // Smooth idle animation. Pixi's ticker callback receives a
-        // numeric delta, so do not type it as PIXI.Ticker.
-        app.ticker.add((delta: number) => {
+        console.info("[Fufuu] Model loaded.");
+        console.info("[Fufuu] Settings keys:", Object.keys(settings ?? {}));
+        console.info("[Fufuu] Parsed settings:", settings);
+        console.info("[Fufuu] Expressions found:", expressions);
+
+        if (expressions.length === 0) {
+          console.error(
+            "[Fufuu] No expressions found in the parsed settings. " +
+              "Verify FileReferences.Expressions in the model JSON " +
+              "and check which settings file the browser is loading."
+          );
+        } else {
+          expressions.forEach((expression, index) => {
+            console.info(
+              `[Fufuu] Expression ${index + 1}:`,
+              getExpressionName(expression),
+              getExpressionFile(expression)
+            );
+          });
+        }
+
+        const core = model.internalModel.coreModel as unknown as CubismParameterAPI;
+
+        tickerCallback = (delta: number) => {
           if (disposed || !model || model.destroyed) return;
 
           const dt = Math.min(delta / 60, 0.05);
-          elapsed += dt;
+          animationTime += dt;
 
-          // Gentle breathing.
+          const trackingEase = 1 - Math.exp(-dt * 5);
+          pointerX += (pointerTargetX - pointerX) * trackingEase;
+          pointerY += (pointerTargetY - pointerY) * trackingEase;
+
+          const rect = canvas.getBoundingClientRect();
+
+          if (rect.width > 0 && rect.height > 0) {
+            model.focus(
+              rect.left + rect.width * (0.5 + pointerX * 0.35),
+              rect.top + rect.height * (0.5 + pointerY * 0.25)
+            );
+          }
+
           setParameter(
             core,
             "ParamBreath",
-            0.5 + Math.sin(elapsed * 1.25) * 0.12,
-          );
-
-          // Small natural head movements.
-          setParameter(
-            core,
-            "ParamAngleX",
-            Math.sin(elapsed * 0.48) * 5 + mouseX * 8,
-          );
-
-          setParameter(
-            core,
-            "ParamAngleY",
-            Math.sin(elapsed * 0.37) * 3 - mouseY * 5,
-          );
-
-          setParameter(
-            core,
-            "ParamAngleZ",
-            Math.sin(elapsed * 0.65) * 2.5,
+            0.5 + Math.sin(animationTime * 1.15) * 0.1
           );
 
           setParameter(
             core,
             "ParamBodyAngleZ",
-            Math.sin(elapsed * 0.5) * 1.5,
+            Math.sin(animationTime * 0.42)
           );
+        };
 
-          // Subtle eye movement when the pointer is nearby.
-          setParameter(
-            core,
-            "ParamEyeBallX",
-            Math.max(-1, Math.min(1, mouseX * 0.7)),
-          );
-
-          setParameter(
-            core,
-            "ParamEyeBallY",
-            Math.max(-1, Math.min(1, -mouseY * 0.5)),
-          );
-
-          // Occasional blink. Keep the eye-open parameters untouched
-          // between blinks so the model can use its normal eye setup.
-          blinkTimer += dt;
-
-          if (blinkTimer >= nextBlink) {
-            blinkTimer = 0;
-            nextBlink = 2.5 + Math.random() * 3.5;
-
-            setParameter(core, "ParamEyeLOpen", 0);
-            setParameter(core, "ParamEyeROpen", 0);
-
-            window.setTimeout(() => {
-              if (disposed) return;
-
-              setParameter(core, "ParamEyeLOpen", 1);
-              setParameter(core, "ParamEyeROpen", 1);
-            }, 120);
-          }
-        });
+        app.ticker.add(tickerCallback);
 
         setFailed(false);
         setStatus("");
 
-        console.log("[Fufuu Live2D] Furina is ready.", {
+        console.info("[Fufuu] Furina is ready.", {
           canvasConnected: canvas.isConnected,
           stageChildren: app.stage.children.length,
-          expressionControls: "Keys 1–7",
+          expressionShortcuts: "1–7",
         });
       } catch (error) {
-        console.error("[Fufuu Live2D] Model loading failed.", error);
+        console.error("[Fufuu] Model loading failed:", error);
 
         if (!disposed) {
           setFailed(true);
-          setStatus("Couldn't load Furina. Check the console for errors.");
+          setStatus("Couldn't load Furina. Check the console.");
         }
       }
     }
@@ -333,14 +401,20 @@ export default function Live2DViewer() {
 
     return () => {
       disposed = true;
-      rendererDestroyed = true;
 
-      resizeObserver.disconnect();
-      app.ticker.stop();
+      resizeObserver?.disconnect();
+      resizeObserver = null;
 
-      canvas.removeEventListener("pointermove", handlePointerMove);
-      canvas.removeEventListener("pointerleave", handlePointerLeave);
+      canvas.removeEventListener("pointermove", updatePointer);
+      canvas.removeEventListener("pointerleave", releasePointer);
       window.removeEventListener("keydown", handleKeyDown);
+
+      if (tickerCallback) {
+        app.ticker.remove(tickerCallback);
+        tickerCallback = null;
+      }
+
+      app.ticker.stop();
 
       if (model) {
         app.stage.removeChild(model);
@@ -358,7 +432,7 @@ export default function Live2DViewer() {
         container.removeChild(canvas);
       }
 
-      console.log("[Fufuu Live2D] Viewer cleaned up.");
+      console.info("[Fufuu] Live2D viewer cleaned up.");
     };
   }, []);
 
