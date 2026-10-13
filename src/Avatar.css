@@ -1,0 +1,224 @@
+
+body.avatar-mode {
+  margin: 0 !important;
+  overflow: hidden !important;
+  background: transparent !important;
+}
+
+body.avatar-mode #root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+}
+
+.sakura-stage {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 5px;
+  color: #fff4fb;
+  font-family: "Segoe UI", sans-serif;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.sakura-orb {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  flex-shrink: 0;
+  border-radius: 42% 58% 53% 47% / 48% 42% 58% 52%;
+  background:
+    radial-gradient(circle at 32% 24%, #fff8ff 0 5%, transparent 6%),
+    radial-gradient(circle at 35% 28%, #ffc9eb, transparent 38%),
+    linear-gradient(145deg, #ffb9e2 5%, #f17ac5 55%, #c95ca9 100%);
+  box-shadow:
+    0 8px 20px #9b4a9b55,
+    inset -7px -9px 14px #a8409850,
+    inset 4px 5px 12px #fff4ffb0;
+  animation: sakura-float 3.2s ease-in-out infinite;
+}
+
+.sakura-orb::before,
+.sakura-orb::after {
+  position: absolute;
+  content: "";
+  width: 24px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffdcf1;
+  opacity: 0.85;
+}
+
+.sakura-orb::before {
+  top: -5px;
+  left: 21px;
+  transform: rotate(-25deg);
+}
+
+.sakura-orb::after {
+  top: 1px;
+  right: 17px;
+  transform: rotate(35deg);
+}
+
+.sakura-flower {
+  position: absolute;
+  z-index: 2;
+  top: 8px;
+  right: 17px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff0fa;
+  color: #e05aa8;
+  box-shadow: 0 2px 6px #9e438755;
+  transform: rotate(15deg);
+}
+
+.sakura-flower span {
+  font-size: 23px;
+  line-height: 1;
+}
+
+.sakura-face {
+  position: absolute;
+  top: 43px;
+  left: 0;
+  width: 100%;
+  height: 45px;
+}
+
+.sakura-eyes {
+  display: flex;
+  justify-content: center;
+  gap: 29px;
+}
+
+.sakura-eyes span {
+  display: block;
+  width: 8px;
+  height: 13px;
+  border-radius: 50%;
+  background: #63344e;
+  animation: sakura-blink 5s infinite;
+}
+
+.sakura-eyes span:nth-child(2) {
+  animation-delay: 0.08s;
+}
+
+.sakura-blush {
+  position: absolute;
+  top: 19px;
+  width: 17px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f66eaf;
+  opacity: 0.75;
+}
+
+.sakura-blush.left {
+  left: 22px;
+}
+
+.sakura-blush.right {
+  right: 22px;
+}
+
+.sakura-mouth {
+  position: absolute;
+  top: 21px;
+  left: 50%;
+  width: 9px;
+  height: 6px;
+  border-bottom: 2px solid #8f416e;
+  border-radius: 0 0 50% 50%;
+  transform: translateX(-50%);
+}
+
+.sakura-shine {
+  position: absolute;
+  top: 28px;
+  left: 15px;
+  width: 15px;
+  height: 29px;
+  border-radius: 50%;
+  background: #ffffff5c;
+  transform: rotate(30deg);
+  filter: blur(2px);
+}
+
+.sakura-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #fff2fc;
+  text-shadow: 0 1px 5px #8e347e;
+  letter-spacing: 0.4px;
+  -webkit-app-region: drag;
+}
+
+.sakura-chat-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 1px solid #ffffff8a;
+  border-radius: 999px;
+  background: #fff2faee;
+  color: #9b3c80;
+  font: 600 11px "Segoe UI", sans-serif;
+  cursor: pointer;
+  box-shadow: 0 3px 12px #8b3a8050;
+  transition: transform 160ms ease, background 160ms ease;
+  -webkit-app-region: no-drag;
+}
+
+.sakura-chat-button:hover {
+  background: #fff;
+  transform: translateY(-2px);
+}
+
+.sakura-chat-button:active {
+  transform: scale(0.96);
+}
+
+.sakura-chat-button span {
+  font-size: 14px;
+}
+
+@keyframes sakura-float {
+  0%, 100% {
+    transform: translateY(0) rotate(-2deg);
+  }
+
+  50% {
+    transform: translateY(-7px) rotate(2deg);
+  }
+}
+
+@keyframes sakura-blink {
+  0%, 45%, 49%, 100% {
+    transform: scaleY(1);
+  }
+
+  47% {
+    transform: scaleY(0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sakura-orb,
+  .sakura-eyes span {
+    animation: none;
+  }
+}
