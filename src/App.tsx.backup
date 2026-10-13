@@ -1,0 +1,295 @@
+
+import { useEffect, useRef, useState } from "react";
+import "./App.css";
+
+type Message = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+const MODEL = "qwen2.5-coder:3b";
+const STORAGE_KEY = "sakura-companion-chat-v1";
+
+const greeting: Message = {
+  role: "assistant",
+  content:
+    "Hey! I'm Sakura 🌸 Your local AI companion. I'm running on your own PC, so let's chat. What are you working on today?",
+};
+
+function loadMessages(): Message[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved) as Message[];
+  } catch {
+    // Start with a fresh conversation if saved data is invalid.
+  }
+  return [greeting];
+}
+
+export default function App() {
+  const [messages, setMessages] = useState<Message[]>(loadMessages);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function sendMessage() {
+    const text = input.trim();
+    if (!text || busy) return;
+
+    const conversation = [...messages, { role: "user" as const, content: text }];
+    setMessages(conversation);
+    setInput("");
+    setError("");
+    setBusy(true);
+
+    // Include recent conversation context, but exclude the initial greeting.
+    const history = conversation
+      .filter((_, index) => !(index === 0 && conversation[index].role === "assistant"))
+      .slice(-20)
+      .map(({ role, content }) => ({ role, content }));
+
+    try {
+      const response = await fetch("http://localhost:11434/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: MODEL,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are Sakura, a friendly, thoughtful desktop AI companion. " +
+                "Be warm, natural, helpful, and conversational. You run locally on the user's PC. " +
+                "Do not claim to see their screen or know things they have not shared.",
+            },
+            ...history,
+          ],
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ollama returned HTTP ${response.status}.`);
+      }
+      if (!response.body) {
+        throw new Error("The response stream was unavailable.");
+      }
+
+      setMessages((current) => [
+        ...current,
+        { role: "assistant", content: "" },
+      ]);
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+
+          const data = JSON.parse(line) as {
+            message?: { content?: string };
+            error?: string;
+          };
+
+          if (data.error) throw new Error(data.error);
+
+          const chunk = data.message?.content ?? "";
+          if (chunk) {
+            setMessages((current) => {
+              const next = [...current];
+              const last = next[next.length - 1];
+              if (last?.role === "assistant") {
+                next[next.length - 1] = {
+                  ...last,
+                  content: last.content + chunk,
+                };
+              }
+              return next;
+            });
+          }
+        }
+
+        if (buffer.trim()) {
+          // Keep any incomplete JSON line for the next chunk.
+          continue;
+        }
+      }
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Something went wrong.";
+      setError(
+        `${message} Check that Ollama is running and the model is available.`,
+      );
+      setMessages((current) => {
+        const last = current[current.length - 1];
+        if (last?.role === "assistant" && !last.content) {
+          return current.slice(0, -1);
+        }
+        return current;
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function clearChat() {
+    if (busy) return;
+    setMessages([greeting]);
+    setError("");
+  }
+
+  return (
+    <main className="app-shell">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">桜</div>
+          <div>
+            <h1>Sakura</h1>
+            <span>LOCAL COMPANION</span>
+          </div>
+        </div>
+
+        <div className="sidebar-label">WORKSPACE</div>
+        <button className="nav-item active">
+          <span>✿</span> Companion chat
+        </button>
+        <button className="nav-item" onClick={clearChat} disabled={busy}>
+          <span>↻</span> New conversation
+        </button>
+
+        <div className="sidebar-bottom">
+          <div className="connection-dot" />
+          <div>
+            <strong>Local mode</strong>
+            <p>Your PC, your models.</p>
+          </div>
+        </div>
+      </aside>
+
+      <section className="main-panel">
+        <header className="topbar">
+          <div>
+            <span className="eyebrow">YOUR PERSONAL SPACE</span>
+            <h2>Companion</h2>
+          </div>
+          <div className="model-pill">
+            <span className="live-dot" />
+            <span>{MODEL}</span>
+          </div>
+        </header>
+
+        <section className="companion-banner">
+          <div className="avatar-wrap">
+            <div className="avatar-halo" />
+            <div className="avatar">🌸</div>
+            <span className="avatar-status" />
+          </div>
+          <div className="companion-info">
+            <span className="eyebrow">YOUR AI COMPANION</span>
+            <h3>Sakura <span className="heart">✿</span></h3>
+            <p>A little space to think, create, and talk.</p>
+            <div className="status-line">
+              <span className="live-dot" />
+              {busy ? "Thinking..." : "Ready to chat"}
+            </div>
+          </div>
+          <div className="banner-decoration">花</div>
+        </section>
+
+        <section className="chat-panel">
+          <div className="chat-heading">
+            <div>
+              <h3>Conversation</h3>
+              <p>Your messages stay in this browser.</p>
+            </div>
+            <span className="local-tag">● LOCAL AI</span>
+          </div>
+
+          <div className="messages">
+            {messages.map((message, index) => (
+              <div className={`message-row ${message.role}`} key={index}>
+                {message.role === "assistant" && (
+                  <div className="message-avatar">桜</div>
+                )}
+                <div className="message-content">
+                  <span className="message-author">
+                    {message.role === "assistant" ? "Sakura" : "You"}
+                  </span>
+                  <div className="message-bubble">
+                    {message.content ||
+                      (busy && index === messages.length - 1
+                        ? "Thinking"
+                        : "")}
+                    {busy &&
+                      message.role === "assistant" &&
+                      index === messages.length - 1 && (
+                        <span className="typing-dots"> ···</span>
+                      )}
+                  </div>
+                </div>
+                {message.role === "user" && (
+                  <div className="user-avatar">K</div>
+                )}
+              </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+
+          {error && <div className="error-message">{error}</div>}
+
+          <form
+            className="composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendMessage();
+            }}
+          >
+            <textarea
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void sendMessage();
+                }
+              }}
+              placeholder="Talk to Sakura... (Enter to send)"
+              rows={2}
+              disabled={busy}
+            />
+            <div className="composer-footer">
+              <span>✧ Running on your own hardware</span>
+              <button
+                type="submit"
+                className="send-button"
+                disabled={busy || !input.trim()}
+              >
+                {busy ? "Thinking..." : "Send ↗"}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <footer className="app-footer">
+          <span>SAKURA COMPANION</span>
+          <span>Built for your little corner of the world ♡</span>
+        </footer>
+      </section>
+    </main>
+  );
+}

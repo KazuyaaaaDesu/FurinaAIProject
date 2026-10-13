@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "conversations": [
+    {
+      "id": "sakura-main",
+      "title": "Sakura Chat",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": "Hey! I'm Sakura 🌸 Your local AI companion. I'm running on your own PC, so let's chat. What are you working on today?"
+        }
+      ],
+      "updatedAt": "2026-10-13T05:24:22.713Z"
+    }
+  ]
+}
