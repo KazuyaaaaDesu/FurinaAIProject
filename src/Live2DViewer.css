@@ -1,0 +1,57 @@
+﻿
+.fufuu-live2d-viewer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent !important;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Dedicated container owned by PixiJS for the Live2D canvas */
+.fufuu-live2d-canvas-host {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent !important;
+  pointer-events: none;
+}
+
+/* PixiJS canvas */
+.fufuu-live2d-canvas-host canvas,
+.fufuu-live2d-viewer canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent !important;
+}
+
+/* Loading and error messages */
+.fufuu-live2d-status {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  top: 50%;
+  max-width: 90%;
+  color: #fff4fb;
+  font: 12px "Segoe UI", sans-serif;
+  text-align: center;
+  text-shadow: 0 1px 6px #512445;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.fufuu-live2d-status.is-error {
+  color: #ffd5d5;
+}

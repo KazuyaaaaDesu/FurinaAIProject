@@ -112,6 +112,7 @@ function createAvatarWindow() {
     visibleOnFullScreen: true,
   });
 
+  avatarWindow.webContents.openDevTools({ mode: "detach" });
   avatarWindow.loadURL(`${APP_URL}/?avatar=1`);
 
   avatarWindow.once("ready-to-show", () => {

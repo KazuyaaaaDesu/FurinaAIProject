@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import "./Avatar.css";
+import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
 
 type DisplayMode = "2d" | "3d";
@@ -55,41 +56,14 @@ export default function Avatar() {
 
   return (
     <main className={`sakura-stage mode-${displayMode}`}>
-      {displayMode === "3d" ? (
-        // Only the VRM viewer exists in 3D mode.
-        <VRMViewer />
-      ) : (
-        // The 2D blob exists only in 2D mode.
-        <div className="fufuu-avatar-2d">
-          <div className="sakura-orb" title="Fufuu is here">
-            <div className="sakura-flower">
-              <span>✿</span>
-            </div>
-
-            <div className="sakura-face">
-              <div className="sakura-eyes">
-                <span />
-                <span />
-              </div>
-
-              <div className="sakura-blush left" />
-              <div className="sakura-blush right" />
-              <div className="sakura-mouth" />
-            </div>
-
-            <div className="sakura-shine" />
-          </div>
-
-          <div className="sakura-name">Fufuu 🌸</div>
-        </div>
-      )}
+      {displayMode === "3d" ? <VRMViewer /> : <Live2DViewer />}
 
       <button
         className="sakura-chat-button"
         onClick={openChat}
         type="button"
       >
-        <span>✧</span> Chat with me
+        <span className="chat-sparkle">✧</span> Chat with me
       </button>
     </main>
   );

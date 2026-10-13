@@ -1,0 +1,114 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fufuu Live2D Compatibility Test</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #20202b;
+      color: white;
+      font: 14px system-ui, sans-serif;
+    }
+    #status {
+      position: fixed;
+      z-index: 2;
+      top: 12px;
+      left: 12px;
+      max-width: calc(100% - 48px);
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: #111a;
+      white-space: pre-wrap;
+    }
+    #stage { width: 100%; height: 100%; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <div id="status">Loading Cubism Core…</div>
+  <div id="stage"></div>
+
+  <script src="/vendor/live2d/live2dcubismcore.min.js"></script>
+  <script src="/node_modules/pixi.js/dist/browser/pixi.min.js"></script>
+  <script src="/node_modules/pixi-live2d-display/dist/cubism4.min.js"></script>
+  <script>
+    const status = document.getElementById("status");
+    const report = (message) => {
+      status.textContent = message;
+      console.log("[Fufuu Live2D test]", message);
+    };
+
+    window.addEventListener("error", (event) => {
+      report("JavaScript error: " + event.message);
+    });
+
+    window.addEventListener("unhandledrejection", (event) => {
+      report("Loading error: " + String(event.reason?.stack || event.reason));
+    });
+
+    async function start() {
+      try {
+        const core = window.Live2DCubismCore;
+        if (!core) throw new Error("Cubism Core did not load.");
+        if (!window.PIXI) throw new Error("PIXI did not load.");
+        if (!PIXI.live2d?.Live2DModel) {
+          throw new Error("pixi-live2d-display did not initialize.");
+        }
+
+        const latest = core.Version?.csmGetLatestMocVersion?.();
+        report("Core loaded. Supported MOC version: " + latest + "\nLoading Furina…");
+
+        const app = new PIXI.Application({
+          resizeTo: window,
+          backgroundAlpha: 0,
+          antialias: true,
+          autoStart: true
+        });
+
+        document.getElementById("stage").appendChild(app.view);
+
+        const model = await PIXI.live2d.Live2DModel.from(
+          "/models/furina-live2d/Furina.model3.json",
+          { autoInteract: false }
+        );
+
+        app.stage.addChild(model);
+
+        function fitModel() {
+          const availableWidth = window.innerWidth * 0.9;
+          const availableHeight = window.innerHeight * 0.9;
+          const scale = Math.min(
+            availableWidth / model.width,
+            availableHeight / model.height
+          );
+          model.scale.set(scale);
+          model.anchor?.set?.(0.5, 0.5);
+          model.x = window.innerWidth / 2;
+          model.y = window.innerHeight / 2;
+        }
+
+        fitModel();
+        window.addEventListener("resize", fitModel);
+
+        report(
+          "SUCCESS — Furina loaded!\n" +
+          "Core supports MOC version: " + latest + "\n" +
+          "Model size: " + Math.round(model.width) + " × " +
+          Math.round(model.height) + "\n" +
+          "Check whether her textures and animations look correct."
+        );
+      } catch (error) {
+        console.error(error);
+        report("FAILED:\n" + String(error?.stack || error));
+      }
+    }
+
+    start();
+  </script>
+</body>
+</html>
