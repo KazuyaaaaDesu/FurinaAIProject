@@ -1,4 +1,5 @@
-﻿const { contextBridge, ipcRenderer } = require("electron");
+﻿
+const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("sakuraDesktop", {
   openChat() {
@@ -18,5 +19,45 @@ contextBridge.exposeInMainWorld("sakuraDesktop", {
 
     ipcRenderer.on("fufuu:display-mode", listener);
     return () => ipcRenderer.removeListener("fufuu:display-mode", listener);
+  },
+
+  setSpeechBubbleEnabled(enabled) {
+    if (typeof enabled === "boolean") {
+      ipcRenderer.send("fufuu:speech-bubble:set-enabled", enabled);
+    }
+  },
+
+  updateSpeechBubble(text) {
+    if (typeof text === "string") {
+      ipcRenderer.send("fufuu:speech-bubble:update", text);
+    }
+  },
+
+  hideSpeechBubble() {
+    ipcRenderer.send("fufuu:speech-bubble:hide");
+  },
+
+  getSpeechBubbleState() {
+    return ipcRenderer.invoke("fufuu:speech-bubble:get-state");
+  },
+
+  onSpeechBubbleEnabled(callback) {
+    const listener = (_event, enabled) => callback(Boolean(enabled));
+
+    ipcRenderer.on("fufuu:speech-bubble:enabled", listener);
+
+    return () =>
+      ipcRenderer.removeListener("fufuu:speech-bubble:enabled", listener);
+  },
+
+  onSpeechBubbleUpdate(callback) {
+    const listener = (_event, text) => {
+      if (typeof text === "string") callback(text);
+    };
+
+    ipcRenderer.on("fufuu:speech-bubble:update", listener);
+
+    return () =>
+      ipcRenderer.removeListener("fufuu:speech-bubble:update", listener);
   },
 });

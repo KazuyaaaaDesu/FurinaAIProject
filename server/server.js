@@ -1,15 +1,29 @@
 ﻿import http from "node:http";
-import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  rename,
+  unlink,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 const DATA_DIR = path.join(ROOT, "data");
 const CONVERSATIONS_FILE = path.join(DATA_DIR, "conversations.json");
+const MEMORY_FILE = path.join(DATA_DIR, "memory.json");
+
 const HOST = "127.0.0.1";
 const PORT = 4317;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
+const MAX_MEMORIES = 200;
+const MAX_MEMORY_LENGTH = 1000;
+
 const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
   "http://127.0.0.1:5173",
@@ -19,19 +33,21 @@ const ALLOWED_ORIGINS = new Set([
   "http://127.0.0.1:5175",
 ]);
 
-let saveQueue = Promise.resolve();
+let conversationSaveQueue = Promise.resolve();
+let memorySaveQueue = Promise.resolve();
 
 async function ensureFiles() {
   await mkdir(DATA_DIR, { recursive: true });
 
   for (const [file, initial] of [
     [CONVERSATIONS_FILE, { version: 1, conversations: [] }],
-    [path.join(DATA_DIR, "memory.json"), { version: 1, memories: [] }],
+    [MEMORY_FILE, { version: 1, memories: [] }],
   ]) {
     try {
       await readFile(file, "utf8");
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
+
       await writeFile(file, JSON.stringify(initial, null, 2), "utf8");
     }
   }
@@ -48,6 +64,7 @@ function send(res, status, body, origin) {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
   });
+
   res.end(JSON.stringify(body));
 }
 
@@ -57,11 +74,13 @@ async function readBody(req) {
 
   for await (const chunk of req) {
     size += chunk.length;
+
     if (size > MAX_BODY_BYTES) {
       const error = new Error("Request body is too large.");
       error.status = 413;
       throw error;
     }
+
     raw += chunk.toString("utf8");
   }
 
@@ -74,38 +93,81 @@ async function readBody(req) {
   }
 }
 
-function validateStore(body) {
+function validateConversationStore(body) {
+  return (
+    body &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    body.version === 1 &&
+    Array.isArray(body.conversations) &&
+    body.conversations.every(
+      (conversation) =>
+        conversation &&
+        typeof conversation === "object" &&
+        !Array.isArray(conversation),
+    )
+  );
+}
+
+function validateMemoryStore(body) {
   if (
     !body ||
     typeof body !== "object" ||
+    Array.isArray(body) ||
     body.version !== 1 ||
-    !Array.isArray(body.conversations)
+    !Array.isArray(body.memories) ||
+    body.memories.length > MAX_MEMORIES
   ) {
     return false;
   }
 
-  return body.conversations.every(
-    (conversation) =>
-      conversation &&
-      typeof conversation === "object" &&
-      !Array.isArray(conversation),
-  );
+  const ids = new Set();
+
+  return body.memories.every((memory) => {
+    if (
+      !memory ||
+      typeof memory !== "object" ||
+      Array.isArray(memory) ||
+      typeof memory.id !== "string" ||
+      memory.id.length === 0 ||
+      memory.id.length > 100 ||
+      ids.has(memory.id) ||
+      typeof memory.content !== "string" ||
+      memory.content.trim().length === 0 ||
+      memory.content.length > MAX_MEMORY_LENGTH ||
+      typeof memory.createdAt !== "string" ||
+      Number.isNaN(Date.parse(memory.createdAt))
+    ) {
+      return false;
+    }
+
+    ids.add(memory.id);
+    return true;
+  });
 }
 
-async function atomicSave(data) {
-  const tempFile = path.join(DATA_DIR, `conversations-${randomUUID()}.tmp`);
+async function atomicSave(file, data, prefix) {
+  const tempFile = path.join(
+    DATA_DIR,
+    `${prefix}-${randomUUID()}.tmp`,
+  );
 
   try {
     await writeFile(tempFile, JSON.stringify(data, null, 2), {
       encoding: "utf8",
       flag: "wx",
     });
-    await rename(tempFile, CONVERSATIONS_FILE);
+
+    await rename(tempFile, file);
   } catch (error) {
-    const { unlink } = await import("node:fs/promises");
     await unlink(tempFile).catch(() => {});
     throw error;
   }
+}
+
+async function readStore(file) {
+  const contents = await readFile(file, "utf8");
+  return JSON.parse(contents.replace(/^\uFEFF/, ""));
 }
 
 const server = http.createServer(async (req, res) => {
@@ -113,12 +175,12 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://${HOST}:${PORT}`);
 
   if (origin && !ALLOWED_ORIGINS.has(origin)) {
-    return send(res, 403, { error: "Origin not allowed." });
+    return send(res, 403, { error: "Origin not allowed." }, null);
   }
 
   if (req.method === "OPTIONS") {
     if (!origin || !ALLOWED_ORIGINS.has(origin)) {
-      return send(res, 403, { error: "Origin not allowed." });
+      return send(res, 403, { error: "Origin not allowed." }, null);
     }
 
     res.writeHead(204, {
@@ -128,6 +190,7 @@ const server = http.createServer(async (req, res) => {
       "Access-Control-Max-Age": "600",
       Vary: "Origin",
     });
+
     return res.end();
   }
 
@@ -136,16 +199,20 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { status: "ok", storage: "D:" }, origin);
     }
 
+    // Existing conversation endpoints
     if (req.method === "GET" && url.pathname === "/api/conversations") {
-      const fileContents = await readFile(CONVERSATIONS_FILE, "utf8");
-      const data = JSON.parse(fileContents.replace(/^\uFEFF/, ""));
-      return send(res, 200, data, origin);
+      return send(
+        res,
+        200,
+        await readStore(CONVERSATIONS_FILE),
+        origin,
+      );
     }
 
     if (req.method === "PUT" && url.pathname === "/api/conversations") {
       const body = await readBody(req);
 
-      if (!validateStore(body)) {
+      if (!validateConversationStore(body)) {
         return send(
           res,
           400,
@@ -154,9 +221,42 @@ const server = http.createServer(async (req, res) => {
         );
       }
 
-      // Queue writes so overlapping requests cannot overwrite each other out of order.
-      const operation = saveQueue.then(() => atomicSave(body));
-      saveQueue = operation.catch(() => {});
+      const operation = conversationSaveQueue.then(() =>
+        atomicSave(CONVERSATIONS_FILE, body, "conversations"),
+      );
+
+      conversationSaveQueue = operation.catch(() => {});
+      await operation;
+
+      return send(res, 200, { status: "saved" }, origin);
+    }
+
+    // New persistent-memory endpoints
+    if (req.method === "GET" && url.pathname === "/api/memories") {
+      return send(res, 200, await readStore(MEMORY_FILE), origin);
+    }
+
+    if (req.method === "PUT" && url.pathname === "/api/memories") {
+      const body = await readBody(req);
+
+      if (!validateMemoryStore(body)) {
+        return send(
+          res,
+          400,
+          {
+            error:
+              "Expected { version: 1, memories: [{ id, content, createdAt }] }. " +
+              `Maximum ${MAX_MEMORIES} memories; each content must be 1–${MAX_MEMORY_LENGTH} characters.`,
+          },
+          origin,
+        );
+      }
+
+      const operation = memorySaveQueue.then(() =>
+        atomicSave(MEMORY_FILE, body, "memory"),
+      );
+
+      memorySaveQueue = operation.catch(() => {});
       await operation;
 
       return send(res, 200, { status: "saved" }, origin);
@@ -165,10 +265,15 @@ const server = http.createServer(async (req, res) => {
     return send(res, 404, { error: "Not found." }, origin);
   } catch (error) {
     console.error("Storage server error:", error);
+
     return send(
       res,
       error.status ?? 500,
-      { error: error.status ? error.message : "Storage operation failed." },
+      {
+        error: error.status
+          ? error.message
+          : "Storage operation failed.",
+      },
       origin,
     );
   }
@@ -177,6 +282,7 @@ const server = http.createServer(async (req, res) => {
 await ensureFiles();
 
 server.listen(PORT, HOST, () => {
-  console.log(`Sakura storage server: http://${HOST}:${PORT}`);
+  console.log(`Fufuu storage server: http://${HOST}:${PORT}`);
   console.log(`Conversation file: ${CONVERSATIONS_FILE}`);
+  console.log(`Memory file: ${MEMORY_FILE}`);
 });

@@ -1,0 +1,112 @@
+
+.speech-bubble-window {
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+  overflow: hidden;
+  background: transparent;
+  font-family: Inter, "Segoe UI", sans-serif;
+  -webkit-app-region: no-drag;
+}
+
+.speech-bubble-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-height: 126px;
+  max-height: 154px;
+  padding: 12px 14px 16px;
+  border: 1px solid rgba(235, 168, 219, 0.42);
+  border-radius: 18px;
+  color: #f7eafa;
+  background: rgba(30, 22, 41, 0.96);
+  box-shadow:
+    0 10px 32px rgba(0, 0, 0, 0.28),
+    inset 0 0 20px rgba(183, 110, 156, 0.07);
+  -webkit-app-region: drag;
+}
+
+.speech-bubble-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: #e9b9df;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.speech-bubble-flower {
+  font-size: 16px;
+}
+
+.speech-bubble-name {
+  letter-spacing: 0.4px;
+}
+
+.speech-bubble-drag-hint {
+  margin-left: auto;
+  color: #9d80a9;
+  font-size: 12px;
+}
+
+.speech-bubble-hide {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  margin-left: 2px;
+  border: 1px solid rgba(235, 168, 219, 0.2);
+  border-radius: 8px;
+  color: #f2dff1;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+  font-size: 19px;
+  line-height: 1;
+  -webkit-app-region: no-drag;
+}
+
+.speech-bubble-hide:hover {
+  background: rgba(235, 168, 219, 0.2);
+}
+
+.speech-bubble-content {
+  margin-top: 10px;
+  overflow: hidden;
+  color: #f0e4f2;
+  font-size: 13px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  line-clamp: 4;
+  -webkit-line-clamp: 4;
+}
+
+.speech-bubble-tail {
+  position: absolute;
+  right: 35px;
+  bottom: -7px;
+  width: 14px;
+  height: 14px;
+  border-right: 1px solid rgba(235, 168, 219, 0.42);
+  border-bottom: 1px solid rgba(235, 168, 219, 0.42);
+  background: #1e1629;
+  transform: rotate(45deg);
+}
+
+.speech-bubble-hide {
+  opacity: 1;
+}
+
+html:has(.speech-bubble-window),
+body:has(.speech-bubble-window),
+#root:has(.speech-bubble-window) {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent !important;
+}
