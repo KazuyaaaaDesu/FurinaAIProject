@@ -13,12 +13,56 @@ type FufuuSpeechBubbleState = {
   text: string;
 };
 
+type FufuuStageSettings = {
+  coverage: "display" | "all";
+  displayId: number | null;
+  width: number;
+  height: number;
+  characterScale: number;
+  characterX: number;
+  characterY: number;
+  facingDegrees: number;
+  walkingSpeed: number;
+  roamingEnabled: boolean;
+};
+
+type FufuuStageDisplay = {
+  id: number;
+  label: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  workArea: { x: number; y: number; width: number; height: number };
+  scaleFactor: number;
+  isPrimary: boolean;
+};
+
+type FufuuStageState = {
+  settings: FufuuStageSettings;
+  displays: FufuuStageDisplay[];
+  allBounds: { x: number; y: number; width: number; height: number };
+};
+
 declare global {
   interface Window {
     sakuraDesktop?: {
       openChat: () => Promise<boolean>;
       openMemories: () => Promise<boolean>;
       onOpenMemories: (callback: () => void) => () => void;
+
+      setPointerInteractive: (interactive: boolean) => void;
+      beginDesktopStageDrag: (screenX: number, screenY: number) => void;
+      endDesktopStageDrag: () => void;
+      getDesktopStageState: () => Promise<FufuuStageState>;
+      updateDesktopStageSettings: (
+        settings: Partial<FufuuStageSettings>,
+      ) => Promise<FufuuStageState>;
+      setDesktopStageSize: (
+        width: number,
+        height: number,
+      ) => Promise<FufuuStageState>;
+      resetDesktopStageSettings: () => Promise<FufuuStageState>;
+      onDesktopStageState: (
+        callback: (state: FufuuStageState) => void,
+      ) => () => void;
 
       setDisplayMode: (mode: FufuuDisplayMode) => void;
       onDisplayMode: (

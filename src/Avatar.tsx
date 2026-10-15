@@ -1,8 +1,19 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   isMotionManifest,
   type MotionDefinition,
 } from "./petBehavior";
+import {
+  DEFAULT_DESKTOP_STAGE_SETTINGS,
+  validateDesktopStageSettings,
+  type DesktopStageSettings,
+  type DesktopStageState,
+} from "./desktopStage";
 import "./Avatar.css";
 import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
@@ -41,7 +52,48 @@ export default function Avatar() {
   const [pendingMotionId, setPendingMotionId] = useState<string | null>(null);
   const [speechBubbleEnabled, setSpeechBubbleEnabled] = useState(false);
   const [toolbarActionError, setToolbarActionError] = useState("");
+  const [stageState, setStageState] = useState<DesktopStageState>(() => {
+    const settings = window.localStorage.getItem("fufuu-desktop-stage-settings");
+    if (!settings) {
+      return {
+        settings: DEFAULT_DESKTOP_STAGE_SETTINGS,
+        displays: [],
+        allBounds: { x: 0, y: 0, width: 0, height: 0 },
+      };
+    }
+    try {
+      const value: unknown = JSON.parse(settings);
+      if (validateDesktopStageSettings(value)) {
+        return {
+          settings: value,
+          displays: [],
+          allBounds: { x: 0, y: 0, width: 0, height: 0 },
+        };
+      }
+    } catch (error) {
+      console.warn("Could not load saved desktop stage preferences:", error);
+    }
+    return {
+      settings: DEFAULT_DESKTOP_STAGE_SETTINGS,
+      displays: [],
+      allBounds: { x: 0, y: 0, width: 0, height: 0 },
+    };
+  });
   const toolbarRef = useRef<HTMLElement>(null);
+  const toolbarOpenRef = useRef(toolbarOpen);
+  toolbarOpenRef.current = toolbarOpen;
+  const pointerExitTimerRef = useRef<number | null>(null);
+  const stageDragPointerRef = useRef<number | null>(null);
+  const resizePointerRef = useRef<{
+    pointerId: number;
+    x: number;
+    y: number;
+    initialWidth: number;
+    initialHeight: number;
+    width: number;
+    height: number;
+  } | null>(null);
+  const lastPointerInteractiveRef = useRef<boolean | null>(null);
 
   useEffect(() => {
     document.body.classList.add("avatar-mode");
@@ -101,12 +153,67 @@ export default function Avatar() {
 
     return () => {
       document.body.classList.remove("avatar-mode");
+      if (pointerExitTimerRef.current !== null) {
+        window.clearTimeout(pointerExitTimerRef.current);
+        pointerExitTimerRef.current = null;
+      }
       window.removeEventListener("storage", handleStorage);
       channel.removeEventListener("message", handleBroadcast);
       channel.close();
       unsubscribeMode?.();
       unsubscribeRoaming?.();
       unsubscribeBubble?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const bridge = window.sakuraDesktop;
+    if (!bridge) return;
+
+    let disposed = false;
+    const acceptStageState = (state: DesktopStageState) => {
+      if (disposed) return;
+      setStageState(state);
+      setRoaming((current) => ({
+        enabled: state.settings.roamingEnabled,
+        moving: current.moving,
+      }));
+    };
+    const unsubscribe = bridge.onDesktopStageState(acceptStageState);
+    void bridge
+      .getDesktopStageState()
+      .then(acceptStageState)
+      .catch((error: unknown) => {
+        console.error("Could not retrieve Electron desktop stage settings:", error);
+        setToolbarActionError(
+          `Couldn't load desktop settings: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isElectronAvatar) return;
+
+    const handlePointerMove = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("canvas")) return;
+
+      const interactive =
+        target.closest(
+          "[data-fufuu-interactive], button, input, select, textarea, a",
+        ) !== null;
+      reportPointerInteractivity(interactive);
+    };
+
+    document.addEventListener("mousemove", handlePointerMove, true);
+    return () => {
+      document.removeEventListener("mousemove", handlePointerMove, true);
     };
   }, []);
 
@@ -206,8 +313,193 @@ export default function Avatar() {
       setToolbarActionError(`Couldn't open Chat: ${message}`);
       return;
     }
-    setToolbarOpen(false);
-    setToolbarPanel(null);
+  }
+
+  function reportPointerInteractivity(interactive: boolean) {
+    if (pointerExitTimerRef.current !== null) {
+      window.clearTimeout(pointerExitTimerRef.current);
+      pointerExitTimerRef.current = null;
+    }
+    if (toolbarOpenRef.current && !interactive) {
+      pointerExitTimerRef.current = window.setTimeout(() => {
+        pointerExitTimerRef.current = null;
+        if (toolbarOpenRef.current) {
+          setToolbarOpen(false);
+          setToolbarPanel(null);
+        }
+      }, 350);
+    }
+
+    if (
+      !isElectronAvatar ||
+      lastPointerInteractiveRef.current === interactive
+    ) {
+      return;
+    }
+    lastPointerInteractiveRef.current = interactive;
+    window.sakuraDesktop?.setPointerInteractive(interactive);
+  }
+
+  async function updateStageSettings(
+    update: Partial<DesktopStageSettings>,
+  ) {
+    const bridge = window.sakuraDesktop;
+    if (bridge) {
+      try {
+        const next = await bridge.updateDesktopStageSettings(update);
+        setStageState(next);
+        setRoaming((current) => ({
+          enabled: next.settings.roamingEnabled,
+          moving: current.moving,
+        }));
+        setToolbarActionError("");
+        return;
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        console.error("[Fufuu] Could not apply desktop stage settings:", error);
+        setToolbarActionError(`Couldn't apply setting: ${message}`);
+        return;
+      }
+    }
+
+    const settings = { ...stageState.settings, ...update };
+    if (!validateDesktopStageSettings(settings)) {
+      setToolbarActionError("This setting value is invalid.");
+      return;
+    }
+    setStageState((current) => ({ ...current, settings }));
+    window.localStorage.setItem(
+      "fufuu-desktop-stage-settings",
+      JSON.stringify(settings),
+    );
+    if (update.roamingEnabled !== undefined) {
+      setRoaming((current) => ({ ...current, enabled: settings.roamingEnabled }));
+    }
+  }
+
+  async function resetStageSettings() {
+    const bridge = window.sakuraDesktop;
+    if (bridge) {
+      try {
+        const next = await bridge.resetDesktopStageSettings();
+        setStageState(next);
+        setRoaming((current) => ({
+          enabled: next.settings.roamingEnabled,
+          moving: current.moving,
+        }));
+        setToolbarActionError("");
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        console.error("[Fufuu] Could not restore default stage placement:", error);
+        setToolbarActionError(`Couldn't restore placement: ${message}`);
+      }
+      return;
+    }
+
+    await updateStageSettings({
+      coverage: "display",
+      displayId: null,
+      width: DEFAULT_DESKTOP_STAGE_SETTINGS.width,
+      height: DEFAULT_DESKTOP_STAGE_SETTINGS.height,
+      characterScale: DEFAULT_DESKTOP_STAGE_SETTINGS.characterScale,
+      characterX: DEFAULT_DESKTOP_STAGE_SETTINGS.characterX,
+      characterY: DEFAULT_DESKTOP_STAGE_SETTINGS.characterY,
+      facingDegrees: DEFAULT_DESKTOP_STAGE_SETTINGS.facingDegrees,
+      walkingSpeed: DEFAULT_DESKTOP_STAGE_SETTINGS.walkingSpeed,
+    });
+  }
+
+  function startStageDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (
+      event.button !== 0 ||
+      stageState.settings.coverage !== "display" ||
+      !window.sakuraDesktop
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    stageDragPointerRef.current = event.pointerId;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    reportPointerInteractivity(true);
+    window.sakuraDesktop.beginDesktopStageDrag(event.screenX, event.screenY);
+  }
+
+  function finishStageDrag(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (stageDragPointerRef.current !== event.pointerId) return;
+
+    stageDragPointerRef.current = null;
+    window.sakuraDesktop?.endDesktopStageDrag();
+    reportPointerInteractivity(false);
+  }
+
+  function startStageResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (
+      stageState.settings.coverage !== "display" ||
+      !window.sakuraDesktop
+    ) {
+      return;
+    }
+    event.preventDefault();
+    reportPointerInteractivity(true);
+    resizePointerRef.current = {
+      pointerId: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      initialWidth: stageState.settings.width,
+      initialHeight: stageState.settings.height,
+      width: stageState.settings.width,
+      height: stageState.settings.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function moveStageResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    const start = resizePointerRef.current;
+    if (!start || start.pointerId !== event.pointerId) return;
+
+    const display =
+      stageState.displays.find(
+        (candidate) => candidate.id === stageState.settings.displayId,
+      ) ?? stageState.displays.find((candidate) => candidate.isPrimary);
+    const maxWidth = display?.workArea.width ?? start.width + 1000;
+    const maxHeight = display?.workArea.height ?? start.height + 1000;
+    const width = Math.round(
+      Math.max(
+        240,
+        Math.min(start.initialWidth + event.clientX - start.x, maxWidth),
+      ),
+    );
+    const height = Math.round(
+      Math.max(
+        320,
+        Math.min(start.initialHeight + event.clientY - start.y, maxHeight),
+      ),
+    );
+    start.width = width;
+    start.height = height;
+    setStageState((current) => ({
+      ...current,
+      settings: { ...current.settings, width, height },
+    }));
+    void window.sakuraDesktop
+      ?.setDesktopStageSize(width, height)
+      .then(setStageState)
+      .catch((error: unknown) => {
+        console.error("[Fufuu] Could not resize the Electron stage:", error);
+      });
+  }
+
+  function finishStageResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (resizePointerRef.current?.pointerId !== event.pointerId) return;
+    const finalSize = resizePointerRef.current;
+    resizePointerRef.current = null;
+    void updateStageSettings({
+      width: finalSize.width,
+      height: finalSize.height,
+    });
   }
 
   function changeDisplayMode(mode: DisplayMode) {
@@ -252,8 +544,7 @@ export default function Avatar() {
   }
 
   function toggleRoaming() {
-    window.sakuraDesktop?.setRoamingEnabled?.(!roaming.enabled);
-    setRoaming((state) => ({ ...state, enabled: !state.enabled }));
+    void updateStageSettings({ roamingEnabled: !roaming.enabled });
   }
 
   function toggleSpeechBubble() {
@@ -278,14 +569,52 @@ export default function Avatar() {
 
   return (
     <main className={`sakura-stage mode-${displayMode}`}>
+      {isElectronAvatar && stageState.settings.coverage === "display" && (
+        <button
+          className="fufuu-stage-drag-handle"
+          type="button"
+          title="Drag to move the stage"
+          aria-label="Drag to move the stage"
+          data-fufuu-interactive
+          onPointerDown={startStageDrag}
+          onPointerUp={finishStageDrag}
+          onPointerCancel={finishStageDrag}
+          onLostPointerCapture={finishStageDrag}
+        >
+          <span aria-hidden="true">⠿</span>
+        </button>
+      )}
+
       {displayMode === "3d" ? (
         <VRMViewer
           roamingEnabled={roaming.enabled}
           onPetClick={showToolbar}
+          onPointerInteractive={reportPointerInteractivity}
+          characterSettings={stageState.settings}
         />
       ) : (
-        <Live2DViewer onPetClick={showToolbar} />
+        <Live2DViewer
+          onPetClick={showToolbar}
+          onPointerInteractive={reportPointerInteractivity}
+        />
       )}
+
+      {isElectronAvatar &&
+        stageState.settings.coverage === "display" && (
+          <button
+            className="fufuu-stage-resize-handle"
+            type="button"
+            title="Drag to resize the stage"
+            aria-label="Drag to resize the stage"
+            data-fufuu-interactive
+            onPointerDown={startStageResize}
+            onPointerMove={moveStageResize}
+            onPointerUp={finishStageResize}
+            onPointerCancel={finishStageResize}
+          >
+            <span aria-hidden="true">◢</span>
+          </button>
+        )}
 
       {!isElectronAvatar && (
         <div className="fufuu-desktop-controls">
@@ -327,6 +656,7 @@ export default function Avatar() {
           className="fufuu-pet-toolbar"
           aria-label="Furina's quick actions"
           data-fufuu-toolbar
+          data-fufuu-interactive
           ref={toolbarRef}
         >
           <div className="fufuu-pet-toolbar-heading">
@@ -426,20 +756,171 @@ export default function Avatar() {
           )}
 
           {toolbarPanel === "settings" && (
-            <section className="fufuu-pet-toolbar-panel" aria-label="Quick settings">
-              <strong>Quick settings</strong>
+            <section className="fufuu-pet-toolbar-panel fufuu-settings-panel" aria-label="Settings">
+              <strong>Stage and character</strong>
               <button type="button" onClick={toggleDisplayMode}>
                 Switch to {displayMode === "2d" ? "3D" : "2D"} avatar
               </button>
-              <button type="button" onClick={toggleRoaming}>
-                {roaming.enabled ? "Pause roaming" : "Resume roaming"}
-              </button>
-              <button
-                type="button"
-                aria-pressed={speechBubbleEnabled}
-                onClick={toggleSpeechBubble}
-              >
-                Speech bubble: {speechBubbleEnabled ? "On" : "Off"}
+              <label className="fufuu-stage-setting fufuu-setting-toggle">
+                <input
+                  type="checkbox"
+                  checked={
+                    roaming.enabled &&
+                    !(displayMode === "2d" &&
+                      stageState.settings.coverage === "all")
+                  }
+                  disabled={
+                    displayMode === "2d" &&
+                    stageState.settings.coverage === "all"
+                  }
+                  onChange={toggleRoaming}
+                />
+                <span>Enable roaming</span>
+              </label>
+              {displayMode === "2d" &&
+                stageState.settings.coverage === "all" && (
+                  <p>
+                    2D window roaming is paused while one window spans all
+                    displays. Switch to a selected display to use it.
+                  </p>
+                )}
+              <label className="fufuu-stage-setting fufuu-setting-toggle">
+                <input
+                  type="checkbox"
+                  checked={speechBubbleEnabled}
+                  onChange={toggleSpeechBubble}
+                />
+                <span>Speech bubble</span>
+              </label>
+              {isElectronAvatar ? (
+                <>
+                  <label className="fufuu-stage-setting">
+                    <span>Desktop coverage</span>
+                    <select
+                      value={stageState.settings.coverage}
+                      onChange={(event) =>
+                        void updateStageSettings({
+                          coverage:
+                            event.currentTarget.value === "all" ? "all" : "display",
+                        })
+                      }
+                    >
+                      <option value="display">Selected display</option>
+                      <option value="all">Entire desktop setup</option>
+                    </select>
+                  </label>
+                  {stageState.settings.coverage === "display" && (
+                    <>
+                      <label className="fufuu-stage-setting">
+                        <span>Display</span>
+                        <select
+                          value={stageState.settings.displayId ?? ""}
+                          onChange={(event) =>
+                            void updateStageSettings({
+                              displayId: Number(event.currentTarget.value),
+                            })
+                          }
+                        >
+                          {stageState.displays.map((display) => (
+                            <option key={display.id} value={display.id}>
+                              {display.label}
+                              {display.isPrimary ? " (Primary)" : ""} ·{" "}
+                              {display.workArea.width}×{display.workArea.height}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {(["width", "height"] as const).map((dimension) => {
+                        const selectedDisplay = stageState.displays.find(
+                          (display) =>
+                            display.id === stageState.settings.displayId,
+                        );
+                        const maximum =
+                          dimension === "width"
+                            ? selectedDisplay?.workArea.width ?? 2000
+                            : selectedDisplay?.workArea.height ?? 1200;
+                        return (
+                          <label
+                            className="fufuu-stage-setting"
+                            key={dimension}
+                          >
+                            <span>
+                              Stage {dimension}: {stageState.settings[dimension]} px
+                            </span>
+                            <input
+                              type="range"
+                              min={Math.min(
+                                dimension === "width" ? 240 : 320,
+                                maximum,
+                              )}
+                              max={maximum}
+                              step="20"
+                              value={Math.min(
+                                stageState.settings[dimension],
+                                maximum,
+                              )}
+                              onChange={(event) =>
+                                void updateStageSettings({
+                                  [dimension]: Number(event.currentTarget.value),
+                                })
+                              }
+                            />
+                          </label>
+                        );
+                      })}
+                    </>
+                  )}
+                  {stageState.settings.coverage === "all" && (
+                    <p>
+                      One transparent stage spans the displays' combined
+                      rectangle; gaps remain click-through. Very large
+                      display unions may require selecting one display.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p>
+                  Monitor coverage and stage sizing are available in the
+                  Electron desktop app.
+                </p>
+              )}
+
+              {(
+                [
+                  ["characterScale", "Character scale", 0.5, 2, 0.05],
+                  ["characterX", "Horizontal position", -1, 1, 0.05],
+                  ["characterY", "Vertical position", -1, 1, 0.05],
+                  ["facingDegrees", "Facing angle", -180, 180, 5],
+                  ["walkingSpeed", "Walking speed", 0.05, 0.5, 0.01],
+                ] as const
+              ).map(([key, label, minimum, maximum, step]) => (
+                <label className="fufuu-stage-setting" key={key}>
+                  <span>
+                    {label}:{" "}
+                    {key === "characterScale"
+                      ? stageState.settings[key].toFixed(2)
+                      : key === "walkingSpeed"
+                        ? stageState.settings[key].toFixed(2)
+                        : stageState.settings[key]}
+                    {key === "facingDegrees" ? "°" : ""}
+                  </span>
+                  <input
+                    type="range"
+                    min={minimum}
+                    max={maximum}
+                    step={step}
+                    value={stageState.settings[key]}
+                    onChange={(event) =>
+                      void updateStageSettings({
+                        [key]: Number(event.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+              ))}
+
+              <button type="button" onClick={resetStageSettings}>
+                Restore default placement
               </button>
             </section>
           )}

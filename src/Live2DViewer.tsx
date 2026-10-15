@@ -126,17 +126,24 @@ function isFufuuEmotion(value: unknown): value is FufuuEmotion {
 
 export default function Live2DViewer({
   onPetClick,
+  onPointerInteractive,
 }: {
   onPetClick: () => void;
+  onPointerInteractive: (interactive: boolean) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const onPetClickRef = useRef(onPetClick);
+  const onPointerInteractiveRef = useRef(onPointerInteractive);
   const [status, setStatus] = useState("Loading Furina…");
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     onPetClickRef.current = onPetClick;
   }, [onPetClick]);
+
+  useEffect(() => {
+    onPointerInteractiveRef.current = onPointerInteractive;
+  }, [onPointerInteractive]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -150,6 +157,7 @@ export default function Live2DViewer({
     let pointerX = 0;
     let pointerY = 0;
     let pointerDownAt: { x: number; y: number } | null = null;
+    let pointerRegionActive: boolean | null = null;
     let pendingExpressionIndex: number | null = null;
     let lastExpressionIndex: number | null = null;
 
@@ -209,7 +217,7 @@ export default function Live2DViewer({
       model.renderable = true;
     }
 
-    function updatePointer(event: PointerEvent) {
+    function updatePointer(event: MouseEvent) {
       if (!model || model.destroyed) return;
 
       const rect = canvas.getBoundingClientRect();
@@ -226,11 +234,22 @@ export default function Live2DViewer({
         -1,
         1,
       );
+
+      const x = ((event.clientX - rect.left) / rect.width) * app.screen.width;
+      const y = ((event.clientY - rect.top) / rect.height) * app.screen.height;
+      const interactive =
+        model.hitTest(x, y).length > 0 || model.getBounds().contains(x, y);
+      if (interactive !== pointerRegionActive) {
+        pointerRegionActive = interactive;
+        onPointerInteractiveRef.current(interactive);
+      }
     }
 
     function releasePointer() {
       pointerTargetX = 0;
       pointerTargetY = 0;
+      pointerRegionActive = false;
+      onPointerInteractiveRef.current(false);
     }
 
     function rememberPointerDown(event: PointerEvent) {
@@ -254,6 +273,8 @@ export default function Live2DViewer({
       const x = ((event.clientX - rect.left) / rect.width) * app.screen.width;
       const y = ((event.clientY - rect.top) / rect.height) * app.screen.height;
       if (model.hitTest(x, y).length > 0 || model.getBounds().contains(x, y)) {
+        pointerRegionActive = true;
+        onPointerInteractiveRef.current(true);
         onPetClickRef.current();
       }
     }
@@ -360,6 +381,7 @@ export default function Live2DViewer({
     }
 
     canvas.addEventListener("pointermove", updatePointer);
+    canvas.addEventListener("mousemove", updatePointer);
     canvas.addEventListener("pointerdown", rememberPointerDown);
     canvas.addEventListener("pointerleave", releasePointer);
     canvas.addEventListener("click", handleCanvasClick);
@@ -477,6 +499,7 @@ export default function Live2DViewer({
       emotionChannel?.close();
 
       canvas.removeEventListener("pointermove", updatePointer);
+      canvas.removeEventListener("mousemove", updatePointer);
       canvas.removeEventListener("pointerdown", rememberPointerDown);
       canvas.removeEventListener("pointerleave", releasePointer);
       canvas.removeEventListener("click", handleCanvasClick);
@@ -490,6 +513,7 @@ export default function Live2DViewer({
       app.ticker.stop();
 
       if (model) {
+        onPointerInteractiveRef.current(false);
         app.stage.removeChild(model);
         model.destroy();
         model = null;

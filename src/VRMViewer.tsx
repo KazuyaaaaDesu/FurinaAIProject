@@ -16,6 +16,7 @@ import {
   PetBehaviorController,
   type MotionDefinition,
 } from "./petBehavior";
+import type { DesktopStageSettings } from "./desktopStage";
 
 type Emotion = "neutral" | "happy" | "relaxed" | "surprised" | "sad";
 
@@ -79,12 +80,25 @@ function getTrackLayout(clip: THREE.AnimationClip) {
 export default function VRMViewer({
   roamingEnabled,
   onPetClick,
+  onPointerInteractive,
+  characterSettings,
 }: {
   roamingEnabled: boolean;
   onPetClick: () => void;
+  onPointerInteractive: (interactive: boolean) => void;
+  characterSettings: Pick<
+    DesktopStageSettings,
+    | "characterScale"
+    | "characterX"
+    | "characterY"
+    | "facingDegrees"
+    | "walkingSpeed"
+  >;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const onPetClickRef = useRef(onPetClick);
+  const onPointerInteractiveRef = useRef(onPointerInteractive);
+  const characterSettingsRef = useRef(characterSettings);
   const [status, setStatus] = useState("Loading Furina...");
   const [failed, setFailed] = useState(false);
   const [motionDebugItems, setMotionDebugItems] = useState<MotionDebugItem[]>(
@@ -101,6 +115,14 @@ export default function VRMViewer({
   useEffect(() => {
     onPetClickRef.current = onPetClick;
   }, [onPetClick]);
+
+  useEffect(() => {
+    onPointerInteractiveRef.current = onPointerInteractive;
+  }, [onPointerInteractive]);
+
+  useEffect(() => {
+    characterSettingsRef.current = characterSettings;
+  }, [characterSettings]);
 
   useEffect(() => {
     roamingEnabledRef.current = roamingEnabled;
@@ -140,7 +162,10 @@ export default function VRMViewer({
     const roamStartRotation = new THREE.Quaternion();
     const roamTargetRotation = new THREE.Quaternion();
     let originalRootX = 0;
+    let modelRootBaseX = 0;
+    let modelRootBaseY = 0;
     let maximumRoamOffset = 0;
+    let maximumVerticalOffset = 0;
     let roamStopElapsed = 0;
     let warnNoRoamSpace = false;
     let loggedRoamingReady = false;
@@ -152,6 +177,8 @@ export default function VRMViewer({
     let modelViewDistance = 0;
     let originalRootY = 0;
     const originalRootRotation = new THREE.Quaternion();
+    const modelBaseRotation = new THREE.Quaternion();
+    const modelStageCenter = new THREE.Vector3();
     const cameraTarget = new THREE.Vector3();
     const cameraDirection = new THREE.Vector3();
     let currentEmotion: Emotion = "happy";
@@ -166,6 +193,7 @@ export default function VRMViewer({
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     let canvasPointerDown: { x: number; y: number } | null = null;
+    let pointerRegionActive: boolean | null = null;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
@@ -209,8 +237,31 @@ export default function VRMViewer({
     fillLight.position.set(-2, 1, -1);
     scene.add(fillLight);
 
+    const updateCanvasPointer = (event: MouseEvent) => {
+      if (!vrm) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      pointer.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((event.clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      raycaster.setFromCamera(pointer, camera);
+      const interactive =
+        raycaster.intersectObject(vrm.scene, true).length > 0;
+      if (interactive !== pointerRegionActive) {
+        pointerRegionActive = interactive;
+        onPointerInteractiveRef.current(interactive);
+      }
+    };
+
     const handleCanvasPointerDown = (event: PointerEvent) => {
       canvasPointerDown = { x: event.clientX, y: event.clientY };
+      updateCanvasPointer(event);
+    };
+
+    const handleCanvasPointerLeave = () => {
+      pointerRegionActive = false;
+      onPointerInteractiveRef.current(false);
     };
 
     const handleCanvasClick = (event: MouseEvent) => {
@@ -232,12 +283,18 @@ export default function VRMViewer({
         -(((event.clientY - rect.top) / rect.height) * 2 - 1),
       );
       raycaster.setFromCamera(pointer, camera);
-      if (raycaster.intersectObject(vrm.scene, true).length > 0) {
+      const hit = raycaster.intersectObject(vrm.scene, true).length > 0;
+      pointerRegionActive = hit;
+      onPointerInteractiveRef.current(hit);
+      if (hit) {
         onPetClickRef.current();
       }
     };
 
+    renderer.domElement.addEventListener("pointermove", updateCanvasPointer);
+    renderer.domElement.addEventListener("mousemove", updateCanvasPointer);
     renderer.domElement.addEventListener("pointerdown", handleCanvasPointerDown);
+    renderer.domElement.addEventListener("pointerleave", handleCanvasPointerLeave);
     renderer.domElement.addEventListener("click", handleCanvasClick);
 
     const updateCameraFraming = () => {
@@ -251,7 +308,8 @@ export default function VRMViewer({
       const requiredDistanceForWidth =
         requiredHalfWidth / (tangent * camera.aspect);
       const requiredDistanceForHeight =
-        (modelHeight / 2 + modelHeight * 0.06) / tangent;
+        (modelHeight / 2 + modelHeight * 0.2 + modelHeight * 0.035) /
+        tangent;
 
       modelViewDistance = Math.max(
         modelBaseCameraDistance,
@@ -264,10 +322,85 @@ export default function VRMViewer({
       camera.lookAt(cameraTarget);
 
       const visibleHalfWidth = tangent * modelViewDistance * camera.aspect;
-      maximumRoamOffset = Math.min(
-        modelHeight * 0.25,
-        Math.max(0, visibleHalfWidth - modelWidth / 2 - horizontalMargin),
+      maximumRoamOffset = Math.max(
+        0,
+        visibleHalfWidth - modelWidth / 2 - horizontalMargin,
       );
+      const visibleHalfHeight = tangent * modelViewDistance;
+      maximumVerticalOffset = Math.max(
+        0,
+        visibleHalfHeight -
+          modelHeight / 2 -
+          horizontalMargin -
+          Math.abs(cameraTarget.y - modelStageCenter.y),
+      );
+    };
+
+    let appliedCharacterSettings = "";
+    const applyCharacterSettings = (force = false) => {
+      if (!vrm) return;
+      const settings = characterSettingsRef.current;
+      const settingsKey = [
+        settings.characterScale,
+        settings.characterX,
+        settings.characterY,
+        settings.facingDegrees,
+        settings.walkingSpeed,
+      ].join(":");
+      if (!force && settingsKey === appliedCharacterSettings) return;
+
+      if (roamPhase !== "waiting") {
+        roamPhase = "waiting";
+        roamWaitRemaining = 3 + Math.random() * 3;
+        if (activeMotion?.definition.id === "walking") {
+          behaviorController.setBase("idle");
+          playIdleMotion(returnTransitionDurationRef.current);
+        }
+      }
+
+      vrm.scene.scale.setScalar(settings.characterScale);
+      vrm.scene.quaternion
+        .copy(modelBaseRotation)
+        .multiply(
+          new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            THREE.MathUtils.degToRad(settings.facingDegrees),
+          ),
+        );
+      vrm.scene.updateMatrixWorld(true);
+
+      const bounds = new THREE.Box3().setFromObject(vrm.scene);
+      const size = bounds.getSize(new THREE.Vector3());
+      const center = bounds.getCenter(new THREE.Vector3());
+      modelHeight = Math.max(size.y, 0.1);
+      modelWidth = size.x;
+      modelStageCenter.set(
+        center.x - vrm.scene.position.x,
+        center.y - vrm.scene.position.y,
+        center.z - vrm.scene.position.z,
+      );
+      cameraTarget.set(
+        modelStageCenter.x,
+        modelStageCenter.y + modelHeight * 0.05,
+        modelStageCenter.z,
+      );
+      modelBaseCameraDistance = modelHeight * 1.7;
+      updateCameraFraming();
+
+      originalRootX = modelRootBaseX;
+      originalRootY = modelRootBaseY + settings.characterY * maximumVerticalOffset;
+      vrm.scene.position.x =
+        originalRootX + settings.characterX * maximumRoamOffset;
+      vrm.scene.position.y = originalRootY;
+      originalRootRotation
+        .copy(modelBaseRotation)
+        .multiply(
+          new THREE.Quaternion().setFromAxisAngle(
+            new THREE.Vector3(0, 1, 0),
+            THREE.MathUtils.degToRad(settings.facingDegrees),
+          ),
+        );
+      appliedCharacterSettings = settingsKey;
     };
 
     const resize = () => {
@@ -279,6 +412,11 @@ export default function VRMViewer({
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
       updateCameraFraming();
+      if (vrm) {
+        window.requestAnimationFrame(() => {
+          if (!disposed) applyCharacterSettings(true);
+        });
+      }
     };
 
     const resizeObserver = new ResizeObserver(resize);
@@ -955,9 +1093,12 @@ export default function VRMViewer({
         const center = bounds.getCenter(new THREE.Vector3());
         modelHeight = Math.max(size.y, 0.1);
         modelWidth = size.x;
-        originalRootY = vrm.scene.position.y;
-        originalRootX = vrm.scene.position.x;
-        originalRootRotation.copy(vrm.scene.quaternion);
+        modelRootBaseY = vrm.scene.position.y;
+        modelRootBaseX = vrm.scene.position.x;
+        originalRootY = modelRootBaseY;
+        originalRootX = modelRootBaseX;
+        modelBaseRotation.copy(vrm.scene.quaternion);
+        modelStageCenter.copy(center);
 
         camera.fov = 30;
         camera.position.set(
@@ -965,12 +1106,13 @@ export default function VRMViewer({
           center.y + modelHeight * 0.04,
           center.z + modelHeight * 1.65,
         );
-        cameraTarget.set(center.x, center.y + modelHeight * 0.42, center.z);
+        cameraTarget.set(center.x, center.y + modelHeight * 0.05, center.z);
         camera.lookAt(cameraTarget);
         cameraDirection.copy(camera.position).sub(cameraTarget).normalize();
         camera.updateProjectionMatrix();
         modelBaseCameraDistance = camera.position.distanceTo(cameraTarget);
         updateCameraFraming();
+        applyCharacterSettings();
         console.info("Furina 3D roaming bounds:", JSON.stringify({
           viewportAspect: camera.aspect,
           modelWidth: size.x,
@@ -1126,7 +1268,8 @@ export default function VRMViewer({
       roamStartRotation.copy(vrm.scene.quaternion);
       roamTargetRotation.copy(originalRootRotation).multiply(turn);
       roamDuration = THREE.MathUtils.clamp(
-        Math.abs(roamTargetX - roamStartX) / (modelHeight * 0.16),
+        Math.abs(roamTargetX - roamStartX) /
+          (modelHeight * characterSettingsRef.current.walkingSpeed),
         1.2,
         3.4,
       );
@@ -1255,6 +1398,8 @@ export default function VRMViewer({
       previousTime = time;
 
       if (vrm) {
+        applyCharacterSettings();
+
         if (transition) {
           transition.elapsed = Math.min(
             transition.elapsed + delta,
@@ -1411,10 +1556,17 @@ export default function VRMViewer({
       window.removeEventListener("fufuu:play-motion", handlePlayMotionEvent);
       unsubscribeKnock?.();
       renderer.domElement.removeEventListener("click", handleCanvasClick);
+      renderer.domElement.removeEventListener("pointermove", updateCanvasPointer);
+      renderer.domElement.removeEventListener("mousemove", updateCanvasPointer);
       renderer.domElement.removeEventListener(
         "pointerdown",
         handleCanvasPointerDown,
       );
+      renderer.domElement.removeEventListener(
+        "pointerleave",
+        handleCanvasPointerLeave,
+      );
+      onPointerInteractiveRef.current(false);
       window.cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
 

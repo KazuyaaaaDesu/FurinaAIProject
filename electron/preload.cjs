@@ -38,6 +38,44 @@ contextBridge.exposeInMainWorld("sakuraDesktop", {
     return () => memoryOpenListeners.delete(callback);
   },
 
+  setPointerInteractive(interactive) {
+    if (typeof interactive === "boolean") {
+      ipcRenderer.send("fufuu:stage:pointer-interactive", interactive);
+    }
+  },
+
+  beginDesktopStageDrag(screenX, screenY) {
+    if (Number.isFinite(screenX) && Number.isFinite(screenY)) {
+      ipcRenderer.send("fufuu:stage:drag", "start", { screenX, screenY });
+    }
+  },
+
+  endDesktopStageDrag() {
+    ipcRenderer.send("fufuu:stage:drag", "end");
+  },
+
+  getDesktopStageState() {
+    return ipcRenderer.invoke("fufuu:stage:get-state");
+  },
+
+  updateDesktopStageSettings(settings) {
+    return ipcRenderer.invoke("fufuu:stage:update-settings", settings);
+  },
+
+  setDesktopStageSize(width, height) {
+    return ipcRenderer.invoke("fufuu:stage:set-size", { width, height });
+  },
+
+  resetDesktopStageSettings() {
+    return ipcRenderer.invoke("fufuu:stage:reset");
+  },
+
+  onDesktopStageState(callback) {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on("fufuu:stage:state", listener);
+    return () => ipcRenderer.removeListener("fufuu:stage:state", listener);
+  },
+
   setDisplayMode(mode) {
     if (mode === "2d" || mode === "3d") {
       ipcRenderer.send("fufuu:set-display-mode", mode);

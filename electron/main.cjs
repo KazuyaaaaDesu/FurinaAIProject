@@ -6,11 +6,14 @@ const fs = require("node:fs");
 const http = require("node:http");
 
 const ROOT = path.resolve(__dirname, "..");
-const APP_URL = "http://127.0.0.1:5173";
+const APP_URL = "http://localhost:5173";
 const STORAGE_URL = "http://127.0.0.1:4317/api/health";
 
 const SPEECH_BRIDGE_HOST = "127.0.0.1";
 const SPEECH_BRIDGE_PORT = 4318;
+const STAGE_SETTINGS_FILE = "desktop-stage-settings.json";
+const MAX_ALL_DISPLAY_STAGE_DIMENSION = 8192;
+const MAX_ALL_DISPLAY_STAGE_PIXELS = 32_000_000;
 
 const ALLOWED_ORIGINS = new Set([
   "http://localhost:5173",
@@ -21,6 +24,23 @@ let avatarWindow = null;
 let chatWindow = null;
 let speechBubbleWindow = null;
 const loadedChatWebContents = new WeakSet();
+let stageSettings = {
+  coverage: "display",
+  displayId: null,
+  width: 360,
+  height: 520,
+  characterScale: 1,
+  characterX: 0,
+  characterY: 0,
+  facingDegrees: 0,
+  walkingSpeed: 0.16,
+  roamingEnabled: false,
+};
+let stageSettingsSaveTimer = null;
+let pointerIgnoreTimer = null;
+let pointerProbeInterval = null;
+let avatarMouseIgnored = false;
+let activeStageDrag = null;
 let speechBubbleEnabled = false;
 let speechBubbleText = "Oh? You're here. What is it?";
 
@@ -127,6 +147,283 @@ function broadcastRoamingState() {
   }
 }
 
+function getDisplayList() {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((display) => ({
+    id: display.id,
+    label: display.label || `Display ${display.id}`,
+    bounds: display.bounds,
+    workArea: display.workArea,
+    scaleFactor: display.scaleFactor,
+    isPrimary: display.id === primaryId,
+  }));
+}
+
+function getAllDisplayBounds() {
+  const displays = screen.getAllDisplays();
+  if (displays.length === 0) {
+    return { x: 0, y: 0, width: AVATAR_WIDTH, height: AVATAR_HEIGHT };
+  }
+
+  const left = Math.min(...displays.map(({ bounds }) => bounds.x));
+  const top = Math.min(...displays.map(({ bounds }) => bounds.y));
+  const right = Math.max(
+    ...displays.map(({ bounds }) => bounds.x + bounds.width),
+  );
+  const bottom = Math.max(
+    ...displays.map(({ bounds }) => bounds.y + bounds.height),
+  );
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function getStageState() {
+  return {
+    settings: { ...stageSettings },
+    displays: getDisplayList(),
+    allBounds: getAllDisplayBounds(),
+  };
+}
+
+function supportsWholeDesktopStage() {
+  const bounds = getAllDisplayBounds();
+  return (
+    bounds.width <= MAX_ALL_DISPLAY_STAGE_DIMENSION &&
+    bounds.height <= MAX_ALL_DISPLAY_STAGE_DIMENSION &&
+    bounds.width * bounds.height <= MAX_ALL_DISPLAY_STAGE_PIXELS
+  );
+}
+
+function broadcastStageState() {
+  const state = getStageState();
+  for (const win of [avatarWindow, chatWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("fufuu:stage:state", state);
+    }
+  }
+}
+
+function selectedStageDisplay(settings = stageSettings) {
+  const displays = screen.getAllDisplays();
+  return (
+    displays.find((display) => display.id === settings.displayId) ??
+    screen.getPrimaryDisplay()
+  );
+}
+
+function clampStageSettings(input, base = stageSettings) {
+  const displays = screen.getAllDisplays();
+  const validDisplay = displays.find(
+    (display) => display.id === input.displayId,
+  );
+  const display = validDisplay ?? screen.getPrimaryDisplay();
+  const coverage = input.coverage === "all" ? "all" : "display";
+  const maxWidth =
+    coverage === "all"
+      ? Math.min(getAllDisplayBounds().width, 10000)
+      : Math.max(1, Math.min(display.workArea.width, 10000));
+  const maxHeight =
+    coverage === "all"
+      ? Math.min(getAllDisplayBounds().height, 10000)
+      : Math.max(1, Math.min(display.workArea.height, 10000));
+  const minWidth = Math.min(240, maxWidth);
+  const minHeight = Math.min(320, maxHeight);
+
+  return {
+    coverage,
+    displayId: display.id,
+    width: Math.round(
+      Math.max(minWidth, Math.min(Number(input.width) || base.width, maxWidth)),
+    ),
+    height: Math.round(
+      Math.max(
+        minHeight,
+        Math.min(Number(input.height) || base.height, maxHeight),
+      ),
+    ),
+    characterScale: Math.max(
+      0.5,
+      Math.min(Number(input.characterScale) || 1, 2),
+    ),
+    characterX: Math.max(-1, Math.min(Number(input.characterX) || 0, 1)),
+    characterY: Math.max(-1, Math.min(Number(input.characterY) || 0, 1)),
+    facingDegrees:
+      ((Math.round(Number(input.facingDegrees) || 0) % 360) + 360) % 360,
+    walkingSpeed: Math.max(
+      0.05,
+      Math.min(Number(input.walkingSpeed) || 0.16, 0.5),
+    ),
+    roamingEnabled: Boolean(input.roamingEnabled),
+  };
+}
+
+function persistStageSettingsSoon() {
+  if (stageSettingsSaveTimer) clearTimeout(stageSettingsSaveTimer);
+  stageSettingsSaveTimer = setTimeout(() => {
+    stageSettingsSaveTimer = null;
+    try {
+      const filePath = path.join(app.getPath("userData"), STAGE_SETTINGS_FILE);
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(stageSettings, null, 2));
+    } catch (error) {
+      console.error("[Fufuu] Could not persist desktop stage settings:", error);
+    }
+  }, 250);
+}
+
+function getStageWindowBounds(settings = stageSettings) {
+  if (settings.coverage === "all") return getAllDisplayBounds();
+
+  const area = selectedStageDisplay(settings).workArea;
+  const width = Math.min(settings.width, area.width);
+  const height = Math.min(settings.height, area.height);
+  return {
+    x: Math.round(area.x + (area.width - width) / 2),
+    y: Math.round(area.y + (area.height - height) / 2),
+    width,
+    height,
+  };
+}
+
+function applyStageWindowBounds({ preservePosition = false } = {}) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+  const bounds = getStageWindowBounds();
+  if (preservePosition && stageSettings.coverage === "display") {
+    const area = selectedStageDisplay().workArea;
+    const current = avatarWindow.getBounds();
+    bounds.x = Math.round(
+      Math.max(
+        area.x,
+        Math.min(current.x, area.x + area.width - bounds.width),
+      ),
+    );
+    bounds.y = Math.round(
+      Math.max(
+        area.y,
+        Math.min(current.y, area.y + area.height - bounds.height),
+      ),
+    );
+  }
+  avatarWindow.setMinimumSize(
+    Math.min(240, bounds.width),
+    Math.min(320, bounds.height),
+  );
+  avatarWindow.setMaximumSize(bounds.width, bounds.height);
+  avatarWindow.setBounds(bounds);
+}
+
+function loadStageSettings() {
+  const filePath = path.join(app.getPath("userData"), STAGE_SETTINGS_FILE);
+  let stored = {};
+  try {
+    if (fs.existsSync(filePath)) {
+      stored = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      if (!stored || typeof stored !== "object" || Array.isArray(stored)) {
+        throw new Error("Saved desktop stage settings are not an object.");
+      }
+    }
+  } catch (error) {
+    console.error("[Fufuu] Could not load desktop stage settings:", error);
+  }
+
+  stageSettings = clampStageSettings(
+    { ...stageSettings, ...stored },
+    stageSettings,
+  );
+  if (stageSettings.coverage === "all" && !supportsWholeDesktopStage()) {
+    console.warn(
+      "[Fufuu] Saved whole-desktop coverage exceeds the safe single-window limit; using the primary display.",
+    );
+    stageSettings = {
+      ...stageSettings,
+      coverage: "display",
+      displayId: screen.getPrimaryDisplay().id,
+    };
+  }
+  roamingEnabled = stageSettings.roamingEnabled;
+}
+
+function updatePointerInteractivity(event, interactive) {
+  if (
+    !avatarWindow ||
+    avatarWindow.isDestroyed() ||
+    event.sender !== avatarWindow.webContents ||
+    typeof interactive !== "boolean"
+  ) {
+    return;
+  }
+
+  if (activeStageDrag && !interactive) return;
+
+  setAvatarPointerInteractivity(interactive);
+}
+
+function setAvatarPointerInteractivity(interactive) {
+  if (pointerIgnoreTimer) {
+    clearTimeout(pointerIgnoreTimer);
+    pointerIgnoreTimer = null;
+  }
+
+  if (interactive) {
+    if (avatarMouseIgnored) {
+      avatarWindow.setIgnoreMouseEvents(false);
+      avatarMouseIgnored = false;
+    }
+    return;
+  }
+
+  pointerIgnoreTimer = setTimeout(() => {
+    pointerIgnoreTimer = null;
+    if (!avatarWindow || avatarWindow.isDestroyed()) return;
+    avatarWindow.setIgnoreMouseEvents(true, { forward: true });
+    avatarMouseIgnored = true;
+  }, 50);
+}
+
+function startPointerProbe() {
+  if (pointerProbeInterval) clearInterval(pointerProbeInterval);
+  pointerProbeInterval = setInterval(() => {
+    if (
+      !avatarWindow ||
+      avatarWindow.isDestroyed() ||
+      avatarWindow.webContents.isDestroyed()
+    ) {
+      return;
+    }
+
+    const cursor = screen.getCursorScreenPoint();
+    if (activeStageDrag) {
+      const target = clampAvatarPosition(
+        cursor.x - activeStageDrag.offsetX,
+        cursor.y - activeStageDrag.offsetY,
+        selectedStageDisplay(),
+      );
+      const bounds = avatarWindow.getBounds();
+      if (target.x !== bounds.x || target.y !== bounds.y) {
+        avatarWindow.setPosition(target.x, target.y);
+      }
+      return;
+    }
+
+    if (!avatarMouseIgnored) return;
+
+    const bounds = avatarWindow.getBounds();
+    const x = cursor.x - bounds.x;
+    const y = cursor.y - bounds.y;
+    if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return;
+
+    avatarWindow.webContents.sendInputEvent({
+      type: "mouseMove",
+      x: Math.round(x),
+      y: Math.round(y),
+    });
+  }, 16);
+}
+
 function clearRoamingTimer() {
   if (roamingTimer) {
     clearTimeout(roamingTimer);
@@ -178,6 +475,7 @@ function scheduleNextRoam(delay = ROAM_INTERVAL_MS) {
   if (
     !roamingEnabled ||
     currentDisplayMode !== "2d" ||
+    stageSettings.coverage === "all" ||
     knockInProgress ||
     knockReturning ||
     quitting
@@ -203,6 +501,8 @@ function roamToNewPosition() {
   ) {
     return;
   }
+
+  if (stageSettings.coverage === "all") return;
 
   if (currentDisplayMode === "3d") {
     scheduleNextRoam(ROAM_INTERVAL_MS + Math.random() * 2500);
@@ -286,6 +586,8 @@ function animateAvatarWindowTo(target, onComplete) {
 
 function setRoamingEnabled(enabled) {
   roamingEnabled = enabled;
+  stageSettings.roamingEnabled = enabled;
+  persistStageSettingsSoon();
 
   if (knockInProgress || knockReturning) {
     clearRoamingTimer();
@@ -340,9 +642,12 @@ function createAvatarWindow() {
     return;
   }
 
+  const initialBounds = getStageWindowBounds();
   avatarWindow = new BrowserWindow({
-    width: AVATAR_WIDTH,
-    height: AVATAR_HEIGHT,
+    x: initialBounds.x,
+    y: initialBounds.y,
+    width: initialBounds.width,
+    height: initialBounds.height,
     minWidth: 240,
     minHeight: 320,
     useContentSize: true,
@@ -372,8 +677,14 @@ function createAvatarWindow() {
   avatarWindow.loadURL(`${APP_URL}/?avatar=1`);
 
   avatarWindow.once("ready-to-show", () => {
-    avatarWindow?.show();
+    if (!avatarWindow || avatarWindow.isDestroyed()) return;
+    applyStageWindowBounds();
+    avatarWindow.show();
+    avatarWindow.setIgnoreMouseEvents(true, { forward: true });
+    avatarMouseIgnored = true;
+    startPointerProbe();
     broadcastRoamingState();
+    broadcastStageState();
   });
 
   avatarWindow.on("close", () => {
@@ -382,6 +693,16 @@ function createAvatarWindow() {
 
   avatarWindow.on("closed", () => {
     console.info("[Fufuu] Avatar window closed.");
+    if (pointerIgnoreTimer) {
+      clearTimeout(pointerIgnoreTimer);
+      pointerIgnoreTimer = null;
+    }
+    if (pointerProbeInterval) {
+      clearInterval(pointerProbeInterval);
+      pointerProbeInterval = null;
+    }
+    avatarMouseIgnored = false;
+    activeStageDrag = null;
     avatarWindow = null;
     knockInProgress = false;
     knockReturnPosition = null;
@@ -723,6 +1044,174 @@ ipcMain.handle("sakura:open-memories", async () => {
   return true;
 });
 
+ipcMain.on("fufuu:stage:pointer-interactive", updatePointerInteractivity);
+
+ipcMain.on("fufuu:stage:drag", (event, action, point) => {
+  if (
+    !avatarWindow ||
+    avatarWindow.isDestroyed() ||
+    event.sender !== avatarWindow.webContents
+  ) {
+    return;
+  }
+
+  if (action === "start") {
+    if (
+      stageSettings.coverage !== "display" ||
+      !point ||
+      !Number.isFinite(point.screenX) ||
+      !Number.isFinite(point.screenY)
+    ) {
+      return;
+    }
+
+    const bounds = avatarWindow.getBounds();
+    activeStageDrag = {
+      offsetX: point.screenX - bounds.x,
+      offsetY: point.screenY - bounds.y,
+    };
+    setAvatarPointerInteractivity(true);
+    return;
+  }
+
+  if (action === "end") {
+    if (!activeStageDrag) return;
+    activeStageDrag = null;
+    setAvatarPointerInteractivity(false);
+  }
+});
+
+ipcMain.handle("fufuu:stage:get-state", () => getStageState());
+
+ipcMain.handle("fufuu:stage:set-size", (event, size) => {
+  if (
+    event.sender !== avatarWindow?.webContents ||
+    !size ||
+    typeof size.width !== "number" ||
+    !Number.isFinite(size.width) ||
+    typeof size.height !== "number" ||
+    !Number.isFinite(size.height) ||
+    stageSettings.coverage !== "display"
+  ) {
+    throw new Error("Invalid stage resize request.");
+  }
+
+  stageSettings = clampStageSettings(
+    { ...stageSettings, width: size.width, height: size.height },
+    stageSettings,
+  );
+  applyStageWindowBounds({ preservePosition: true });
+  persistStageSettingsSoon();
+  broadcastStageState();
+  return getStageState();
+});
+
+ipcMain.handle("fufuu:stage:update-settings", (event, update) => {
+  if (
+    event.sender !== avatarWindow?.webContents ||
+    !update ||
+    typeof update !== "object" ||
+    Array.isArray(update)
+  ) {
+    throw new Error("Invalid desktop stage settings update.");
+  }
+
+  const allowedKeys = new Set([
+    "coverage",
+    "displayId",
+    "width",
+    "height",
+    "characterScale",
+    "characterX",
+    "characterY",
+    "facingDegrees",
+    "walkingSpeed",
+    "roamingEnabled",
+  ]);
+  if (Object.keys(update).some((key) => !allowedKeys.has(key))) {
+    throw new Error("Desktop stage settings contain an unsupported field.");
+  }
+
+  const candidate = { ...stageSettings, ...update };
+  if (
+    (candidate.coverage !== "display" && candidate.coverage !== "all") ||
+    (candidate.displayId !== null &&
+      (typeof candidate.displayId !== "number" ||
+        !Number.isInteger(candidate.displayId))) ||
+    !Number.isFinite(candidate.width) ||
+    !Number.isFinite(candidate.height) ||
+    !Number.isFinite(candidate.characterScale) ||
+    !Number.isFinite(candidate.characterX) ||
+    !Number.isFinite(candidate.characterY) ||
+    !Number.isFinite(candidate.facingDegrees) ||
+    !Number.isFinite(candidate.walkingSpeed) ||
+    typeof candidate.roamingEnabled !== "boolean"
+  ) {
+    throw new Error("Desktop stage settings contain invalid values.");
+  }
+
+  if (candidate.coverage === "all" && !supportsWholeDesktopStage()) {
+    throw new Error(
+      "The combined display area exceeds the safe single-window rendering limits. Select one display instead.",
+    );
+  }
+
+  const preservePosition =
+    stageSettings.coverage === "display" &&
+    candidate.coverage === "display" &&
+    candidate.displayId === stageSettings.displayId;
+  const previousCoverage = stageSettings.coverage;
+  stageSettings = clampStageSettings(candidate, stageSettings);
+  if (update.roamingEnabled !== undefined) {
+    setRoamingEnabled(stageSettings.roamingEnabled);
+  }
+  if (previousCoverage !== stageSettings.coverage && currentDisplayMode === "2d") {
+    if (stageSettings.coverage === "all") {
+      stopRoamingTimer();
+    } else if (roamingEnabled) {
+      scheduleNextRoam(900);
+    }
+  }
+  if (
+    previousCoverage !== stageSettings.coverage ||
+    update.displayId !== undefined ||
+    update.width !== undefined ||
+    update.height !== undefined
+  ) {
+    applyStageWindowBounds({ preservePosition });
+  }
+  persistStageSettingsSoon();
+  broadcastStageState();
+  return getStageState();
+});
+
+ipcMain.handle("fufuu:stage:reset", (event) => {
+  if (event.sender !== avatarWindow?.webContents) {
+    throw new Error("Only the avatar window can reset desktop stage settings.");
+  }
+
+  const primaryDisplay = screen.getPrimaryDisplay();
+  stageSettings = clampStageSettings(
+    {
+      ...stageSettings,
+      coverage: "display",
+      displayId: primaryDisplay.id,
+      width: AVATAR_WIDTH,
+      height: AVATAR_HEIGHT,
+      characterScale: 1,
+      characterX: 0,
+      characterY: 0,
+      facingDegrees: 0,
+      walkingSpeed: 0.16,
+    },
+    stageSettings,
+  );
+  applyStageWindowBounds();
+  persistStageSettingsSoon();
+  broadcastStageState();
+  return getStageState();
+});
+
 ipcMain.on("fufuu:set-display-mode", (_event, mode) => {
   if (mode !== "2d" && mode !== "3d") return;
 
@@ -813,10 +1302,42 @@ ipcMain.handle("fufuu:speech-bubble:get-state", () => ({
 
 app.whenReady().then(async () => {
   try {
+    loadStageSettings();
     await startStorageServer();
     await startVite();
     startSpeechBridge();
     createAvatarWindow();
+
+    const refreshStageForDisplayChange = () => {
+      stopRoamingTimer();
+      const previousCoverage = stageSettings.coverage;
+      const previousDisplayId = stageSettings.displayId;
+      if (stageSettings.coverage === "all" && !supportsWholeDesktopStage()) {
+        console.warn(
+          "[Fufuu] The updated display union exceeds the safe single-window limit; reverting to the primary display.",
+        );
+        stageSettings = {
+          ...stageSettings,
+          coverage: "display",
+          displayId: screen.getPrimaryDisplay().id,
+        };
+      }
+      stageSettings = clampStageSettings(stageSettings, stageSettings);
+      if (
+        previousCoverage !== stageSettings.coverage ||
+        previousDisplayId !== stageSettings.displayId
+      ) {
+        persistStageSettingsSoon();
+      }
+      applyStageWindowBounds();
+      broadcastStageState();
+      if (roamingEnabled && currentDisplayMode === "2d") {
+        scheduleNextRoam(900);
+      }
+    };
+    screen.on("display-added", refreshStageForDisplayChange);
+    screen.on("display-removed", refreshStageForDisplayChange);
+    screen.on("display-metrics-changed", refreshStageForDisplayChange);
   } catch (error) {
     console.error("Fufuu desktop startup failed:", error);
     app.quit();
