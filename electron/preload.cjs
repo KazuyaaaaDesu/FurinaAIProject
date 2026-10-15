@@ -16,6 +16,43 @@ ipcRenderer.on("sakura:open-memories", () => {
 });
 
 contextBridge.exposeInMainWorld("sakuraDesktop", {
+  openPetToolbar(geometry) {
+    return ipcRenderer.invoke("fufuu:toolbar:open", geometry);
+  },
+
+  closePetToolbar() {
+    return ipcRenderer.invoke("fufuu:toolbar:close");
+  },
+
+  getPetToolbarState() {
+    return ipcRenderer.invoke("fufuu:toolbar:get-state");
+  },
+
+  reportCharacterGeometry(geometry) {
+    ipcRenderer.send("fufuu:stage:character-geometry", geometry);
+  },
+
+  onPetToolbarVisibility(callback) {
+    const listener = (_event, visible) => {
+      if (typeof visible === "boolean") callback(visible);
+    };
+    ipcRenderer.on("fufuu:toolbar:visibility", listener);
+    return () =>
+      ipcRenderer.removeListener("fufuu:toolbar:visibility", listener);
+  },
+
+  playPetMotion(motionId) {
+    return ipcRenderer.invoke("fufuu:toolbar:play-motion", motionId);
+  },
+
+  onPetMotion(callback) {
+    const listener = (_event, motionId) => {
+      if (typeof motionId === "string") callback(motionId);
+    };
+    ipcRenderer.on("fufuu:motion:play", listener);
+    return () => ipcRenderer.removeListener("fufuu:motion:play", listener);
+  },
+
   openChat() {
     return ipcRenderer.invoke("sakura:open-chat");
   },

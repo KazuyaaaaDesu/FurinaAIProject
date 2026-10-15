@@ -23,6 +23,11 @@ const ALLOWED_ORIGINS = new Set([
 let avatarWindow = null;
 let chatWindow = null;
 let speechBubbleWindow = null;
+let toolbarWindow = null;
+let toolbarWindowLoad = null;
+let toolbarVisible = false;
+let toolbarHideTimer = null;
+let lastCharacterGeometry = null;
 const loadedChatWebContents = new WeakSet();
 let stageSettings = {
   coverage: "display",
@@ -60,6 +65,8 @@ let movementInProgress = false;
 
 const AVATAR_WIDTH = 360;
 const AVATAR_HEIGHT = 520;
+const TOOLBAR_WIDTH = 320;
+const TOOLBAR_HEIGHT = 560;
 const ROAM_INTERVAL_MS = 3500;
 const ROAM_MARGIN = 12;
 
@@ -200,11 +207,290 @@ function supportsWholeDesktopStage() {
 
 function broadcastStageState() {
   const state = getStageState();
-  for (const win of [avatarWindow, chatWindow]) {
+  for (const win of [avatarWindow, chatWindow, toolbarWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send("fufuu:stage:state", state);
     }
   }
+}
+
+function isAvatarOrToolbarSender(sender) {
+  return (
+    sender === avatarWindow?.webContents ||
+    sender === toolbarWindow?.webContents
+  );
+}
+
+function validateCharacterGeometry(value, bounds) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = [
+    "viewportWidth",
+    "viewportHeight",
+    "left",
+    "top",
+    "right",
+    "bottom",
+    "anchorX",
+    "anchorY",
+  ];
+  if (
+    keys.some(
+      (key) => typeof value[key] !== "number" || !Number.isFinite(value[key]),
+    )
+  ) {
+    return false;
+  }
+
+  return (
+    value.viewportWidth > 0 &&
+    value.viewportWidth <= 10000 &&
+    value.viewportHeight > 0 &&
+    value.viewportHeight <= 10000 &&
+    value.left >= -64 &&
+    value.top >= -64 &&
+    value.right <= value.viewportWidth + 64 &&
+    value.bottom <= value.viewportHeight + 64 &&
+    value.right >= value.left &&
+    value.bottom >= value.top &&
+    value.anchorX >= 0 &&
+    value.anchorX <= value.viewportWidth &&
+    value.anchorY >= 0 &&
+    value.anchorY <= value.viewportHeight &&
+    value.viewportWidth / value.viewportHeight < 20 &&
+    bounds.width > 0 &&
+    bounds.height > 0
+  );
+}
+
+function getCharacterScreenGeometry(geometry = lastCharacterGeometry) {
+  if (
+    !geometry ||
+    !avatarWindow ||
+    avatarWindow.isDestroyed() ||
+    !validateCharacterGeometry(geometry, avatarWindow.getBounds())
+  ) {
+    return null;
+  }
+
+  const bounds = avatarWindow.getBounds();
+  const scaleX = bounds.width / geometry.viewportWidth;
+  const scaleY = bounds.height / geometry.viewportHeight;
+  return {
+    left: bounds.x + geometry.left * scaleX,
+    top: bounds.y + geometry.top * scaleY,
+    right: bounds.x + geometry.right * scaleX,
+    bottom: bounds.y + geometry.bottom * scaleY,
+    anchorX: bounds.x + geometry.anchorX * scaleX,
+    anchorY: bounds.y + geometry.anchorY * scaleY,
+  };
+}
+
+function positionToolbarWindow() {
+  if (!toolbarWindow || toolbarWindow.isDestroyed()) return;
+
+  const character = getCharacterScreenGeometry();
+  const anchor = character
+    ? { x: character.anchorX, y: character.anchorY }
+    : (() => {
+        if (!avatarWindow || avatarWindow.isDestroyed()) {
+          return screen.getPrimaryDisplay().workArea;
+        }
+        const bounds = avatarWindow.getBounds();
+        return {
+          x: bounds.x + bounds.width / 2,
+          y: bounds.y + bounds.height / 2,
+        };
+      })();
+  const display = screen.getDisplayNearestPoint(anchor);
+  const area = display.workArea;
+  const width = Math.min(TOOLBAR_WIDTH, area.width);
+  const height = Math.min(TOOLBAR_HEIGHT, area.height);
+  const gap = 14;
+  let x = anchor.x + gap;
+  if (x + width > area.x + area.width) x = anchor.x - width - gap;
+  let y = anchor.y - Math.round(height * 0.58);
+  x = Math.round(Math.max(area.x, Math.min(x, area.x + area.width - width)));
+  y = Math.round(Math.max(area.y, Math.min(y, area.y + area.height - height)));
+
+  toolbarWindow.setBounds({ x, y, width, height }, false);
+}
+
+function broadcastToolbarVisibility() {
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send(
+      "fufuu:toolbar:visibility",
+      toolbarVisible,
+    );
+  }
+}
+
+function createToolbarWindow() {
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) return toolbarWindow;
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    throw new Error("The character stage must be available before the toolbar.");
+  }
+
+  toolbarWindow = new BrowserWindow({
+    x: 0,
+    y: 0,
+    width: TOOLBAR_WIDTH,
+    height: TOOLBAR_HEIGHT,
+    minWidth: TOOLBAR_WIDTH,
+    minHeight: 360,
+    maxWidth: TOOLBAR_WIDTH,
+    useContentSize: true,
+    transparent: true,
+    backgroundColor: "#00000000",
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    hasShadow: true,
+    show: false,
+    focusable: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  toolbarWindow.setAlwaysOnTop(true, "screen-saver");
+  toolbarWindow.setVisibleOnAllWorkspaces(true, {
+    visibleOnFullScreen: true,
+  });
+  toolbarWindow.webContents.on("before-input-event", dismissToolbarOnEscape);
+  toolbarWindowLoad = app.isPackaged
+    ? toolbarWindow.loadFile(path.join(ROOT, "dist", "index.html"), {
+        query: { avatar: "1", toolbar: "1" },
+      })
+    : toolbarWindow.loadURL(`${APP_URL}/?avatar=1&toolbar=1`);
+  toolbarWindowLoad.catch((error) => {
+    console.error("[Fufuu] Contextual toolbar failed to load:", error);
+  });
+
+  toolbarWindow.on("close", (event) => {
+    if (quitting) return;
+    event.preventDefault();
+    hideToolbarWindow();
+  });
+  toolbarWindow.on("closed", () => {
+    toolbarWindow = null;
+    toolbarWindowLoad = null;
+    toolbarVisible = false;
+    broadcastToolbarVisibility();
+  });
+
+  return toolbarWindow;
+}
+
+function hideToolbarWindow() {
+  if (toolbarHideTimer) {
+    clearTimeout(toolbarHideTimer);
+    toolbarHideTimer = null;
+  }
+  toolbarVisible = false;
+  if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+    toolbarWindow.hide();
+  }
+  broadcastToolbarVisibility();
+}
+
+function dismissToolbarOnEscape(event, input) {
+  if (input.type === "keyDown" && input.key === "Escape" && toolbarVisible) {
+    event.preventDefault();
+    hideToolbarWindow();
+  }
+}
+
+async function showToolbarWindow(geometry) {
+  const toolbar = createToolbarWindow();
+  if (geometry !== null && geometry !== undefined) {
+    if (
+      !avatarWindow ||
+      !validateCharacterGeometry(geometry, avatarWindow.getBounds())
+    ) {
+      throw new Error("Invalid Furina screen position for the contextual toolbar.");
+    }
+    lastCharacterGeometry = geometry;
+  }
+
+  if (toolbarWindowLoad) await toolbarWindowLoad;
+  if (toolbar.isDestroyed()) {
+    throw new Error("The contextual toolbar was closed before it finished loading.");
+  }
+  positionToolbarWindow();
+  toolbarVisible = true;
+  broadcastToolbarVisibility();
+  toolbar.setAlwaysOnTop(true, "screen-saver");
+  toolbar.showInactive();
+  toolbar.moveTop();
+  return true;
+}
+
+function updateToolbarPositionForStage() {
+  // Intentionally do nothing. The toolbar is an independent window and keeps
+  // its current screen position while Fufuu moves or the stage is resized.
+  // positionToolbarWindow() is called when the toolbar opens, so reopening it
+  // places it beside Fufuu's current position.
+}
+
+function updateToolbarDismissal(cursor) {
+  if (!toolbarVisible || !avatarWindow || avatarWindow.isDestroyed()) return;
+
+  const toolbarBounds =
+    toolbarWindow && !toolbarWindow.isDestroyed()
+      ? toolbarWindow.getBounds()
+      : null;
+  const character = getCharacterScreenGeometry();
+  const margin = 28;
+  const insideCharacter =
+    character !== null &&
+    cursor.x >= character.left - margin &&
+    cursor.x <= character.right + margin &&
+    cursor.y >= character.top - margin &&
+    cursor.y <= character.bottom + margin;
+  const insideToolbar =
+    toolbarBounds !== null &&
+    cursor.x >= toolbarBounds.x &&
+    cursor.x < toolbarBounds.x + toolbarBounds.width &&
+    cursor.y >= toolbarBounds.y &&
+    cursor.y < toolbarBounds.y + toolbarBounds.height;
+
+  if (insideCharacter || insideToolbar) {
+    if (toolbarHideTimer) {
+      clearTimeout(toolbarHideTimer);
+      toolbarHideTimer = null;
+    }
+    return;
+  }
+
+  if (toolbarHideTimer) return;
+  toolbarHideTimer = setTimeout(() => {
+    toolbarHideTimer = null;
+    if (!toolbarVisible) return;
+    const currentCursor = screen.getCursorScreenPoint();
+    const currentToolbarBounds =
+      toolbarWindow && !toolbarWindow.isDestroyed()
+        ? toolbarWindow.getBounds()
+        : null;
+    const currentCharacter = getCharacterScreenGeometry();
+    const stillInsideCharacter =
+      currentCharacter !== null &&
+      currentCursor.x >= currentCharacter.left - margin &&
+      currentCursor.x <= currentCharacter.right + margin &&
+      currentCursor.y >= currentCharacter.top - margin &&
+      currentCursor.y <= currentCharacter.bottom + margin;
+    const stillInsideToolbar =
+      currentToolbarBounds !== null &&
+      currentCursor.x >= currentToolbarBounds.x &&
+      currentCursor.x < currentToolbarBounds.x + currentToolbarBounds.width &&
+      currentCursor.y >= currentToolbarBounds.y &&
+      currentCursor.y < currentToolbarBounds.y + currentToolbarBounds.height;
+    if (!stillInsideCharacter && !stillInsideToolbar) hideToolbarWindow();
+  }, 450);
 }
 
 function selectedStageDisplay(settings = stageSettings) {
@@ -247,7 +533,7 @@ function clampStageSettings(input, base = stageSettings) {
     ),
     characterScale: Math.max(
       0.5,
-      Math.min(Number(input.characterScale) || 1, 2),
+      Math.min(Number(input.characterScale) || 1, 1.35),
     ),
     characterX: Math.max(-1, Math.min(Number(input.characterX) || 0, 1)),
     characterY: Math.max(-1, Math.min(Number(input.characterY) || 0, 1)),
@@ -314,6 +600,7 @@ function applyStageWindowBounds({ preservePosition = false } = {}) {
   );
   avatarWindow.setMaximumSize(bounds.width, bounds.height);
   avatarWindow.setBounds(bounds);
+  updateToolbarPositionForStage();
 }
 
 function loadStageSettings() {
@@ -384,6 +671,30 @@ function setAvatarPointerInteractivity(interactive) {
   }, 50);
 }
 
+function isCursorInsideStageInteractiveRegion(cursor, bounds) {
+  const localX = cursor.x - bounds.x;
+  const localY = cursor.y - bounds.y;
+  if (
+    stageSettings.coverage === "display" &&
+    localX >= 8 &&
+    localX <= 46 &&
+    localY >= 8 &&
+    localY <= 46
+  ) {
+    return true;
+  }
+
+  const character = getCharacterScreenGeometry();
+  const margin = 8;
+  return (
+    character !== null &&
+    cursor.x >= character.left - margin &&
+    cursor.x <= character.right + margin &&
+    cursor.y >= character.top - margin &&
+    cursor.y <= character.bottom + margin
+  );
+}
+
 function startPointerProbe() {
   if (pointerProbeInterval) clearInterval(pointerProbeInterval);
   pointerProbeInterval = setInterval(() => {
@@ -396,6 +707,7 @@ function startPointerProbe() {
     }
 
     const cursor = screen.getCursorScreenPoint();
+    updateToolbarDismissal(cursor);
     if (activeStageDrag) {
       const target = clampAvatarPosition(
         cursor.x - activeStageDrag.offsetX,
@@ -405,13 +717,20 @@ function startPointerProbe() {
       const bounds = avatarWindow.getBounds();
       if (target.x !== bounds.x || target.y !== bounds.y) {
         avatarWindow.setPosition(target.x, target.y);
+        updateToolbarPositionForStage();
       }
       return;
     }
 
+    const bounds = avatarWindow.getBounds();
+    if (isCursorInsideStageInteractiveRegion(cursor, bounds)) {
+      setAvatarPointerInteractivity(true);
+    } else if (!avatarMouseIgnored && !pointerIgnoreTimer) {
+      setAvatarPointerInteractivity(false);
+    }
+
     if (!avatarMouseIgnored) return;
 
-    const bounds = avatarWindow.getBounds();
     const x = cursor.x - bounds.x;
     const y = cursor.y - bounds.y;
     if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return;
@@ -573,6 +892,7 @@ function animateAvatarWindowTo(target, onComplete) {
     const y = Math.round(start.y + (destination.y - start.y) * eased);
 
     avatarWindow.setPosition(x, y);
+    updateToolbarPositionForStage();
 
     if (progress < 1) return;
 
@@ -673,6 +993,7 @@ function createAvatarWindow() {
   avatarWindow.setVisibleOnAllWorkspaces(true, {
     visibleOnFullScreen: true,
   });
+  avatarWindow.webContents.on("before-input-event", dismissToolbarOnEscape);
 
   avatarWindow.loadURL(`${APP_URL}/?avatar=1`);
 
@@ -701,6 +1022,17 @@ function createAvatarWindow() {
       clearInterval(pointerProbeInterval);
       pointerProbeInterval = null;
     }
+    if (toolbarHideTimer) {
+      clearTimeout(toolbarHideTimer);
+      toolbarHideTimer = null;
+    }
+    if (toolbarWindow && !toolbarWindow.isDestroyed()) {
+      toolbarWindow.destroy();
+    }
+    toolbarWindow = null;
+    toolbarWindowLoad = null;
+    toolbarVisible = false;
+    lastCharacterGeometry = null;
     avatarMouseIgnored = false;
     activeStageDrag = null;
     avatarWindow = null;
@@ -1044,6 +1376,59 @@ ipcMain.handle("sakura:open-memories", async () => {
   return true;
 });
 
+ipcMain.handle("fufuu:toolbar:open", async (event, geometry) => {
+  if (event.sender !== avatarWindow?.webContents) {
+    throw new Error("Only the character stage can open the contextual toolbar.");
+  }
+  return showToolbarWindow(geometry);
+});
+
+ipcMain.handle("fufuu:toolbar:close", (event) => {
+  if (!isAvatarOrToolbarSender(event.sender)) {
+    throw new Error("Only Fufuu windows can close the contextual toolbar.");
+  }
+  hideToolbarWindow();
+  return true;
+});
+
+ipcMain.handle("fufuu:toolbar:get-state", (event) => {
+  if (!isAvatarOrToolbarSender(event.sender)) {
+    throw new Error("Only Fufuu windows can read the contextual toolbar state.");
+  }
+  return toolbarVisible;
+});
+
+ipcMain.on("fufuu:stage:character-geometry", (event, geometry) => {
+  if (
+    event.sender !== avatarWindow?.webContents ||
+    !avatarWindow ||
+    !validateCharacterGeometry(geometry, avatarWindow.getBounds())
+  ) {
+    return;
+  }
+  lastCharacterGeometry = geometry;
+  updateToolbarPositionForStage();
+});
+
+ipcMain.handle("fufuu:toolbar:play-motion", (event, motionId) => {
+  if (
+    event.sender !== toolbarWindow?.webContents ||
+    typeof motionId !== "string" ||
+    !/^[a-zA-Z0-9_-]{1,80}$/.test(motionId)
+  ) {
+    throw new Error("Invalid motion request from the contextual toolbar.");
+  }
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    throw new Error("The character stage is unavailable.");
+  }
+
+  currentDisplayMode = "3d";
+  avatarWindow.webContents.send("fufuu:display-mode", "3d");
+  avatarWindow.webContents.send("fufuu:motion:play", motionId);
+  hideToolbarWindow();
+  return true;
+});
+
 ipcMain.on("fufuu:stage:pointer-interactive", updatePointerInteractivity);
 
 ipcMain.on("fufuu:stage:drag", (event, action, point) => {
@@ -1108,7 +1493,7 @@ ipcMain.handle("fufuu:stage:set-size", (event, size) => {
 
 ipcMain.handle("fufuu:stage:update-settings", (event, update) => {
   if (
-    event.sender !== avatarWindow?.webContents ||
+    !isAvatarOrToolbarSender(event.sender) ||
     !update ||
     typeof update !== "object" ||
     Array.isArray(update)
@@ -1186,8 +1571,8 @@ ipcMain.handle("fufuu:stage:update-settings", (event, update) => {
 });
 
 ipcMain.handle("fufuu:stage:reset", (event) => {
-  if (event.sender !== avatarWindow?.webContents) {
-    throw new Error("Only the avatar window can reset desktop stage settings.");
+  if (!isAvatarOrToolbarSender(event.sender)) {
+    throw new Error("Only Fufuu windows can reset desktop stage settings.");
   }
 
   const primaryDisplay = screen.getPrimaryDisplay();

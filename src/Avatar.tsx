@@ -10,7 +10,10 @@ import {
 } from "./petBehavior";
 import {
   DEFAULT_DESKTOP_STAGE_SETTINGS,
+  MAX_CHARACTER_SCALE,
+  MIN_CHARACTER_SCALE,
   validateDesktopStageSettings,
+  type CharacterScreenGeometry,
   type DesktopStageSettings,
   type DesktopStageState,
 } from "./desktopStage";
@@ -37,7 +40,7 @@ const isElectronAvatar = window.sakuraDesktop !== undefined;
 const forceThreeDimensional =
   new URLSearchParams(window.location.search).get("debugMotions") === "1";
 
-export default function Avatar() {
+export default function Avatar({ toolbarOnly = false }: { toolbarOnly?: boolean }) {
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() =>
     forceThreeDimensional ||
     window.localStorage.getItem("fufuu-display-mode") === "3d"
@@ -45,7 +48,14 @@ export default function Avatar() {
       : "2d",
   );
   const [roaming, setRoaming] = useState<RoamingState>(INITIAL_ROAMING_STATE);
+  const [autonomousBehaviorEnabled, setAutonomousBehaviorEnabled] =
+    useState(() => {
+      const saved = window.localStorage.getItem("fufuu-autonomous-behavior");
+      return saved === "true";
+    });
   const [toolbarOpen, setToolbarOpen] = useState(false);
+  const [characterGeometry, setCharacterGeometry] =
+    useState<CharacterScreenGeometry | null>(null);
   const [toolbarPanel, setToolbarPanel] = useState<ToolbarPanel | null>(null);
   const [motions, setMotions] = useState<MotionDefinition[]>([]);
   const [motionLoadError, setMotionLoadError] = useState("");
@@ -70,6 +80,30 @@ export default function Avatar() {
           allBounds: { x: 0, y: 0, width: 0, height: 0 },
         };
       }
+      if (
+        typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value)
+      ) {
+        const saved = value as Record<string, unknown>;
+        if (
+          typeof saved.characterScale === "number" &&
+          Number.isFinite(saved.characterScale) &&
+          saved.characterScale > MAX_CHARACTER_SCALE
+        ) {
+          const migrated = {
+            ...saved,
+            characterScale: MAX_CHARACTER_SCALE,
+          };
+          if (validateDesktopStageSettings(migrated)) {
+            return {
+              settings: migrated,
+              displays: [],
+              allBounds: { x: 0, y: 0, width: 0, height: 0 },
+            };
+          }
+        }
+      }
     } catch (error) {
       console.warn("Could not load saved desktop stage preferences:", error);
     }
@@ -84,16 +118,31 @@ export default function Avatar() {
   toolbarOpenRef.current = toolbarOpen;
   const pointerExitTimerRef = useRef<number | null>(null);
   const stageDragPointerRef = useRef<number | null>(null);
-  const resizePointerRef = useRef<{
+  const characterResizePointerRef = useRef<{
     pointerId: number;
-    x: number;
     y: number;
-    initialWidth: number;
-    initialHeight: number;
-    width: number;
-    height: number;
+    initialScale: number;
+    scale: number;
   } | null>(null);
   const lastPointerInteractiveRef = useRef<boolean | null>(null);
+  const reportPointerInteractivityRef = useRef(reportPointerInteractivity);
+  reportPointerInteractivityRef.current = reportPointerInteractivity;
+
+  useEffect(() => {
+    const unsubscribeVisibility =
+      window.sakuraDesktop?.onPetToolbarVisibility?.(setToolbarOpen);
+    const unsubscribeMotion =
+      window.sakuraDesktop?.onPetMotion?.(setPendingMotionId);
+    void window.sakuraDesktop?.getPetToolbarState?.().then(setToolbarOpen).catch(
+      (error: unknown) => {
+        console.warn("[Fufuu] Could not retrieve toolbar visibility:", error);
+      },
+    );
+    return () => {
+      unsubscribeVisibility?.();
+      unsubscribeMotion?.();
+    };
+  }, []);
 
   useEffect(() => {
     document.body.classList.add("avatar-mode");
@@ -208,7 +257,7 @@ export default function Avatar() {
         target.closest(
           "[data-fufuu-interactive], button, input, select, textarea, a",
         ) !== null;
-      reportPointerInteractivity(interactive);
+      reportPointerInteractivityRef.current(interactive);
     };
 
     document.addEventListener("mousemove", handlePointerMove, true);
@@ -276,31 +325,38 @@ export default function Avatar() {
   }, [displayMode, pendingMotionId]);
 
   useEffect(() => {
-    if (!toolbarOpen) return;
-
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setToolbarOpen(false);
-        setToolbarPanel(null);
-      }
+      if (event.key === "Escape" && (toolbarOnly || toolbarOpen)) closeToolbar();
     };
+    if (!toolbarOnly && (!toolbarOpen || isElectronAvatar)) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (
         event.target instanceof Node &&
         !toolbarRef.current?.contains(event.target)
       ) {
-        setToolbarOpen(false);
-        setToolbarPanel(null);
+        closeToolbar();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("pointerdown", handlePointerDown);
+    if (!toolbarOnly) window.addEventListener("pointerdown", handlePointerDown);
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [toolbarOpen]);
+  }, [toolbarOpen, toolbarOnly]);
+
+  function closeToolbar() {
+    if (isElectronAvatar) {
+      void window.sakuraDesktop?.closePetToolbar?.().catch((error: unknown) => {
+        console.error("[Fufuu] Could not close the pet toolbar:", error);
+        setToolbarActionError("Couldn't close quick actions.");
+      });
+    } else {
+      setToolbarOpen(false);
+    }
+    setToolbarPanel(null);
+  }
 
   async function openChat() {
     try {
@@ -320,15 +376,15 @@ export default function Avatar() {
       window.clearTimeout(pointerExitTimerRef.current);
       pointerExitTimerRef.current = null;
     }
-    if (toolbarOpenRef.current && !interactive) {
-      pointerExitTimerRef.current = window.setTimeout(() => {
-        pointerExitTimerRef.current = null;
-        if (toolbarOpenRef.current) {
-          setToolbarOpen(false);
-          setToolbarPanel(null);
-        }
-      }, 350);
+    
+    if (pointerExitTimerRef.current !== null) {
+      window.clearTimeout(pointerExitTimerRef.current);
+      pointerExitTimerRef.current = null;
     }
+
+    // Don't auto-close the toolbar when the cursor leaves
+    // the character or interactive area.
+
 
     if (
       !isElectronAvatar ||
@@ -435,71 +491,45 @@ export default function Avatar() {
     reportPointerInteractivity(false);
   }
 
-  function startStageResize(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (
-      stageState.settings.coverage !== "display" ||
-      !window.sakuraDesktop
-    ) {
-      return;
-    }
+  function startCharacterResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) return;
+
     event.preventDefault();
+    event.stopPropagation();
     reportPointerInteractivity(true);
-    resizePointerRef.current = {
+    characterResizePointerRef.current = {
       pointerId: event.pointerId,
-      x: event.clientX,
       y: event.clientY,
-      initialWidth: stageState.settings.width,
-      initialHeight: stageState.settings.height,
-      width: stageState.settings.width,
-      height: stageState.settings.height,
+      initialScale: stageState.settings.characterScale,
+      scale: stageState.settings.characterScale,
     };
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
-  function moveStageResize(event: ReactPointerEvent<HTMLButtonElement>) {
-    const start = resizePointerRef.current;
+  function moveCharacterResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    const start = characterResizePointerRef.current;
     if (!start || start.pointerId !== event.pointerId) return;
 
-    const display =
-      stageState.displays.find(
-        (candidate) => candidate.id === stageState.settings.displayId,
-      ) ?? stageState.displays.find((candidate) => candidate.isPrimary);
-    const maxWidth = display?.workArea.width ?? start.width + 1000;
-    const maxHeight = display?.workArea.height ?? start.height + 1000;
-    const width = Math.round(
-      Math.max(
-        240,
-        Math.min(start.initialWidth + event.clientX - start.x, maxWidth),
+    const scale = Math.max(
+      MIN_CHARACTER_SCALE,
+      Math.min(
+        start.initialScale + (start.y - event.clientY) / 180,
+        MAX_CHARACTER_SCALE,
       ),
     );
-    const height = Math.round(
-      Math.max(
-        320,
-        Math.min(start.initialHeight + event.clientY - start.y, maxHeight),
-      ),
-    );
-    start.width = width;
-    start.height = height;
+    start.scale = scale;
     setStageState((current) => ({
       ...current,
-      settings: { ...current.settings, width, height },
+      settings: { ...current.settings, characterScale: scale },
     }));
-    void window.sakuraDesktop
-      ?.setDesktopStageSize(width, height)
-      .then(setStageState)
-      .catch((error: unknown) => {
-        console.error("[Fufuu] Could not resize the Electron stage:", error);
-      });
   }
 
-  function finishStageResize(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (resizePointerRef.current?.pointerId !== event.pointerId) return;
-    const finalSize = resizePointerRef.current;
-    resizePointerRef.current = null;
-    void updateStageSettings({
-      width: finalSize.width,
-      height: finalSize.height,
-    });
+  function finishCharacterResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = characterResizePointerRef.current;
+    if (drag?.pointerId !== event.pointerId) return;
+    characterResizePointerRef.current = null;
+    void updateStageSettings({ characterScale: drag.scale });
+    reportPointerInteractivity(false);
   }
 
   function changeDisplayMode(mode: DisplayMode) {
@@ -532,19 +562,32 @@ export default function Avatar() {
       channel.close();
       await openChat();
     }
-    setToolbarOpen(false);
-    setToolbarPanel(null);
+    closeToolbar();
   }
 
   function chooseMotion(motionId: string) {
     if (displayMode !== "3d") changeDisplayMode("3d");
+    if (toolbarOnly && isElectronAvatar) {
+      void window.sakuraDesktop?.playPetMotion(motionId).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[Fufuu] Could not play the selected motion:", error);
+        setToolbarActionError(`Couldn't play motion: ${message}`);
+      });
+      closeToolbar();
+      return;
+    }
     setPendingMotionId(motionId);
-    setToolbarOpen(false);
-    setToolbarPanel(null);
+    closeToolbar();
   }
 
   function toggleRoaming() {
     void updateStageSettings({ roamingEnabled: !roaming.enabled });
+  }
+
+  function toggleAutonomousBehavior() {
+    const next = !autonomousBehaviorEnabled;
+    setAutonomousBehaviorEnabled(next);
+    window.localStorage.setItem("fufuu-autonomous-behavior", String(next));
   }
 
   function toggleSpeechBubble() {
@@ -557,7 +600,23 @@ export default function Avatar() {
     changeDisplayMode(displayMode === "2d" ? "3d" : "2d");
   }
 
-  function showToolbar() {
+  function updateCharacterGeometry(
+    geometry: CharacterScreenGeometry | null,
+  ) {
+    setCharacterGeometry(geometry);
+    if (geometry) window.sakuraDesktop?.reportCharacterGeometry(geometry);
+  }
+
+  function showToolbar(geometry: CharacterScreenGeometry) {
+    updateCharacterGeometry(geometry);
+    if (isElectronAvatar) {
+      void window.sakuraDesktop?.openPetToolbar(geometry).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        console.error("[Fufuu] Could not open the pet toolbar:", error);
+        setToolbarActionError(`Couldn't open quick actions: ${message}`);
+      });
+      return;
+    }
     setToolbarOpen(true);
     setToolbarPanel(null);
   }
@@ -568,8 +627,16 @@ export default function Avatar() {
   );
 
   return (
-    <main className={`sakura-stage mode-${displayMode}`}>
-      {isElectronAvatar && stageState.settings.coverage === "display" && (
+    <main
+      className={
+        toolbarOnly
+          ? "fufuu-toolbar-window"
+          : `sakura-stage mode-${displayMode}`
+      }
+    >
+      {!toolbarOnly &&
+      isElectronAvatar &&
+      stageState.settings.coverage === "display" && (
         <button
           className="fufuu-stage-drag-handle"
           type="button"
@@ -585,38 +652,60 @@ export default function Avatar() {
         </button>
       )}
 
-      {displayMode === "3d" ? (
+      {!toolbarOnly && (displayMode === "3d" ? (
         <VRMViewer
           roamingEnabled={roaming.enabled}
+          autonomousBehaviorEnabled={autonomousBehaviorEnabled}
           onPetClick={showToolbar}
           onPointerInteractive={reportPointerInteractivity}
+          onCharacterGeometryChange={updateCharacterGeometry}
           characterSettings={stageState.settings}
         />
       ) : (
         <Live2DViewer
           onPetClick={showToolbar}
           onPointerInteractive={reportPointerInteractivity}
+          onCharacterGeometryChange={updateCharacterGeometry}
         />
+      ))}
+
+      {!toolbarOnly &&
+        isElectronAvatar &&
+        toolbarOpen &&
+        displayMode === "3d" &&
+        characterGeometry && (
+        <button
+          className="fufuu-character-resize-handle"
+          type="button"
+          title="Drag up or down to resize Furina"
+          aria-label="Drag up or down to resize Furina"
+          data-fufuu-interactive
+          style={{
+            left: `${Math.max(
+              0,
+              Math.min(
+                characterGeometry.anchorX - 23,
+                characterGeometry.viewportWidth - 25,
+              ),
+            )}px`,
+            top: `${Math.max(
+              0,
+              Math.min(
+                characterGeometry.anchorY - 23,
+                characterGeometry.viewportHeight - 25,
+              ),
+            )}px`,
+          }}
+          onPointerDown={startCharacterResize}
+          onPointerMove={moveCharacterResize}
+          onPointerUp={finishCharacterResize}
+          onPointerCancel={finishCharacterResize}
+        >
+          <span aria-hidden="true">↗</span>
+        </button>
       )}
 
-      {isElectronAvatar &&
-        stageState.settings.coverage === "display" && (
-          <button
-            className="fufuu-stage-resize-handle"
-            type="button"
-            title="Drag to resize the stage"
-            aria-label="Drag to resize the stage"
-            data-fufuu-interactive
-            onPointerDown={startStageResize}
-            onPointerMove={moveStageResize}
-            onPointerUp={finishStageResize}
-            onPointerCancel={finishStageResize}
-          >
-            <span aria-hidden="true">◢</span>
-          </button>
-        )}
-
-      {!isElectronAvatar && (
+      {!toolbarOnly && !isElectronAvatar && (
         <div className="fufuu-desktop-controls">
           <button
             className="fufuu-control-button"
@@ -641,7 +730,7 @@ export default function Avatar() {
         </div>
       )}
 
-      {!isElectronAvatar && (
+      {!toolbarOnly && !isElectronAvatar && (
         <button
           className="sakura-chat-button"
           onClick={openChat}
@@ -651,7 +740,7 @@ export default function Avatar() {
         </button>
       )}
 
-      {toolbarOpen && (
+      {(toolbarOnly || (!isElectronAvatar && toolbarOpen)) && (
         <aside
           className="fufuu-pet-toolbar"
           aria-label="Furina's quick actions"
@@ -665,10 +754,7 @@ export default function Avatar() {
               type="button"
               aria-label="Close quick actions"
               title="Close"
-              onClick={() => {
-                setToolbarOpen(false);
-                setToolbarPanel(null);
-              }}
+              onClick={closeToolbar}
             >
               ×
             </button>
@@ -777,6 +863,14 @@ export default function Avatar() {
                 />
                 <span>Enable roaming</span>
               </label>
+              <label className="fufuu-stage-setting fufuu-setting-toggle">
+                <input
+                  type="checkbox"
+                  checked={autonomousBehaviorEnabled}
+                  onChange={toggleAutonomousBehavior}
+                />
+                <span>Autonomous gestures (3D only)</span>
+              </label>
               {displayMode === "2d" &&
                 stageState.settings.coverage === "all" && (
                   <p>
@@ -830,6 +924,10 @@ export default function Avatar() {
                           ))}
                         </select>
                       </label>
+                      <p>
+                        Stage dimensions resize the transparent window only;
+                        Furina&apos;s scale is controlled separately.
+                      </p>
                       {(["width", "height"] as const).map((dimension) => {
                         const selectedDisplay = stageState.displays.find(
                           (display) =>
@@ -887,7 +985,13 @@ export default function Avatar() {
 
               {(
                 [
-                  ["characterScale", "Character scale", 0.5, 2, 0.05],
+                  [
+                    "characterScale",
+                    "Character scale",
+                    MIN_CHARACTER_SCALE,
+                    MAX_CHARACTER_SCALE,
+                    0.05,
+                  ],
                   ["characterX", "Horizontal position", -1, 1, 0.05],
                   ["characterY", "Vertical position", -1, 1, 0.05],
                   ["facingDegrees", "Facing angle", -180, 180, 5],

@@ -28,6 +28,20 @@ export type DesktopStageState = {
   allBounds: { x: number; y: number; width: number; height: number };
 };
 
+export type CharacterScreenGeometry = {
+  viewportWidth: number;
+  viewportHeight: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  anchorX: number;
+  anchorY: number;
+};
+
+export const MIN_CHARACTER_SCALE = 0.5;
+export const MAX_CHARACTER_SCALE = 1.35;
+
 export const DEFAULT_DESKTOP_STAGE_SETTINGS: DesktopStageSettings = {
   coverage: "display",
   displayId: null,
@@ -64,8 +78,8 @@ export function validateDesktopStageSettings(
     settings.height <= 10000 &&
     typeof settings.characterScale === "number" &&
     Number.isFinite(settings.characterScale) &&
-    settings.characterScale >= 0.5 &&
-    settings.characterScale <= 2 &&
+    settings.characterScale >= MIN_CHARACTER_SCALE &&
+    settings.characterScale <= MAX_CHARACTER_SCALE &&
     typeof settings.characterX === "number" &&
     Number.isFinite(settings.characterX) &&
     settings.characterX >= -1 &&

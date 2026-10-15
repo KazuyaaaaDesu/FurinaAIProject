@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
+import type { CharacterScreenGeometry } from "./desktopStage";
 import "./Live2DViewer.css";
 
 Live2DModel.registerTicker(PIXI.Ticker);
@@ -127,13 +128,18 @@ function isFufuuEmotion(value: unknown): value is FufuuEmotion {
 export default function Live2DViewer({
   onPetClick,
   onPointerInteractive,
+  onCharacterGeometryChange,
 }: {
-  onPetClick: () => void;
+  onPetClick: (geometry: CharacterScreenGeometry) => void;
   onPointerInteractive: (interactive: boolean) => void;
+  onCharacterGeometryChange: (
+    geometry: CharacterScreenGeometry | null,
+  ) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const onPetClickRef = useRef(onPetClick);
   const onPointerInteractiveRef = useRef(onPointerInteractive);
+  const onCharacterGeometryChangeRef = useRef(onCharacterGeometryChange);
   const [status, setStatus] = useState("Loading Furina…");
   const [failed, setFailed] = useState(false);
 
@@ -144,6 +150,10 @@ export default function Live2DViewer({
   useEffect(() => {
     onPointerInteractiveRef.current = onPointerInteractive;
   }, [onPointerInteractive]);
+
+  useEffect(() => {
+    onCharacterGeometryChangeRef.current = onCharacterGeometryChange;
+  }, [onCharacterGeometryChange]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -160,6 +170,8 @@ export default function Live2DViewer({
     let pointerRegionActive: boolean | null = null;
     let pendingExpressionIndex: number | null = null;
     let lastExpressionIndex: number | null = null;
+    let lastGeometryReportAt = 0;
+    let lastGeometry: CharacterScreenGeometry | null = null;
 
     let resizeObserver: ResizeObserver | null = null;
     let tickerCallback: ((delta: number) => void) | null = null;
@@ -245,6 +257,51 @@ export default function Live2DViewer({
       }
     }
 
+    function getCharacterGeometry(): CharacterScreenGeometry | null {
+      if (!model || model.destroyed) return null;
+      const rect = canvas.getBoundingClientRect();
+      if (
+        !rect.width ||
+        !rect.height ||
+        !app.screen.width ||
+        !app.screen.height
+      ) {
+        return null;
+      }
+      const bounds = model.getBounds();
+      const left = clamp(
+        (bounds.x / app.screen.width) * rect.width,
+        0,
+        rect.width,
+      );
+      const top = clamp(
+        (bounds.y / app.screen.height) * rect.height,
+        0,
+        rect.height,
+      );
+      const right = clamp(
+        ((bounds.x + bounds.width) / app.screen.width) * rect.width,
+        0,
+        rect.width,
+      );
+      const bottom = clamp(
+        ((bounds.y + bounds.height) / app.screen.height) * rect.height,
+        0,
+        rect.height,
+      );
+      if (right < left || bottom < top) return null;
+      return {
+        viewportWidth: rect.width,
+        viewportHeight: rect.height,
+        left,
+        top,
+        right,
+        bottom,
+        anchorX: right,
+        anchorY: bottom,
+      };
+    }
+
     function releasePointer() {
       pointerTargetX = 0;
       pointerTargetY = 0;
@@ -275,7 +332,12 @@ export default function Live2DViewer({
       if (model.hitTest(x, y).length > 0 || model.getBounds().contains(x, y)) {
         pointerRegionActive = true;
         onPointerInteractiveRef.current(true);
-        onPetClickRef.current();
+        const geometry = getCharacterGeometry();
+        if (geometry) {
+          lastGeometry = geometry;
+          onCharacterGeometryChangeRef.current(geometry);
+          onPetClickRef.current(geometry);
+        }
       }
     }
 
@@ -434,6 +496,7 @@ export default function Live2DViewer({
 
           const dt = Math.min(delta / 60, 0.05);
           animationTime += dt;
+          lastGeometryReportAt += dt * 1000;
 
           const trackingEase = 1 - Math.exp(-dt * 5);
           pointerX += (pointerTargetX - pointerX) * trackingEase;
@@ -459,6 +522,28 @@ export default function Live2DViewer({
             "ParamBodyAngleZ",
             Math.sin(animationTime * 0.42),
           );
+
+          if (lastGeometryReportAt >= 33) {
+            lastGeometryReportAt %= 33;
+            const geometry = getCharacterGeometry();
+            if (geometry) {
+              const previous = lastGeometry;
+              if (
+                !previous ||
+                Math.abs(previous.anchorX - geometry.anchorX) >= 0.75 ||
+                Math.abs(previous.anchorY - geometry.anchorY) >= 0.75 ||
+                Math.abs(previous.left - geometry.left) >= 0.75 ||
+                Math.abs(previous.top - geometry.top) >= 0.75 ||
+                Math.abs(previous.right - geometry.right) >= 0.75 ||
+                Math.abs(previous.bottom - geometry.bottom) >= 0.75 ||
+                previous.viewportWidth !== geometry.viewportWidth ||
+                previous.viewportHeight !== geometry.viewportHeight
+              ) {
+                lastGeometry = geometry;
+                onCharacterGeometryChangeRef.current(geometry);
+              }
+            }
+          }
         };
 
         app.ticker.add(tickerCallback);
@@ -514,6 +599,7 @@ export default function Live2DViewer({
 
       if (model) {
         onPointerInteractiveRef.current(false);
+        onCharacterGeometryChangeRef.current(null);
         app.stage.removeChild(model);
         model.destroy();
         model = null;

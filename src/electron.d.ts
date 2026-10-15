@@ -41,6 +41,17 @@ type FufuuStageState = {
   allBounds: { x: number; y: number; width: number; height: number };
 };
 
+type FufuuCharacterScreenGeometry = {
+  viewportWidth: number;
+  viewportHeight: number;
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+  anchorX: number;
+  anchorY: number;
+};
+
 declare global {
   interface Window {
     sakuraDesktop?: {
@@ -49,6 +60,17 @@ declare global {
       onOpenMemories: (callback: () => void) => () => void;
 
       setPointerInteractive: (interactive: boolean) => void;
+      openPetToolbar: (
+        geometry: FufuuCharacterScreenGeometry | null,
+      ) => Promise<boolean>;
+      closePetToolbar: () => Promise<boolean>;
+      getPetToolbarState: () => Promise<boolean>;
+      reportCharacterGeometry: (
+        geometry: FufuuCharacterScreenGeometry,
+      ) => void;
+      onPetToolbarVisibility: (callback: (visible: boolean) => void) => () => void;
+      playPetMotion: (motionId: string) => Promise<boolean>;
+      onPetMotion: (callback: (motionId: string) => void) => () => void;
       beginDesktopStageDrag: (screenX: number, screenY: number) => void;
       endDesktopStageDrag: () => void;
       getDesktopStageState: () => Promise<FufuuStageState>;
