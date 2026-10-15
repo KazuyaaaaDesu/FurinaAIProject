@@ -16,7 +16,11 @@ import {
   PetBehaviorController,
   type MotionDefinition,
 } from "./petBehavior";
-import type { DesktopStageSettings } from "./desktopStage";
+import {
+  DEFAULT_DESKTOP_STAGE_SETTINGS,
+  type CharacterScreenGeometry,
+  type DesktopStageSettings,
+} from "./desktopStage";
 
 type Emotion = "neutral" | "happy" | "relaxed" | "surprised" | "sad";
 
@@ -50,6 +54,18 @@ type MotionTransition = {
 const EMOTION_NAMES = ["happy", "relaxed", "surprised", "sad"] as const;
 const SHOW_MOTION_DEBUG =
   new URLSearchParams(window.location.search).get("debugMotions") === "1";
+const SHOW_AUTONOMOUS_DEBUG =
+  new URLSearchParams(window.location.search).get("debugAutonomous") === "1";
+
+const autonomousLogLast: Record<string, number> = {};
+const autonomousLog = (key: string, message: string) => {
+  if (!SHOW_AUTONOMOUS_DEBUG) return;
+  const now = performance.now();
+  const last = autonomousLogLast[key] ?? -Infinity;
+  if (now - last < 1000) return;
+  autonomousLogLast[key] = now;
+  console.info(`[Fufuu autonomous] ${message}`);
+};
 
 const EMOTION_WEIGHTS: Record<
   Emotion,
@@ -79,13 +95,19 @@ function getTrackLayout(clip: THREE.AnimationClip) {
 
 export default function VRMViewer({
   roamingEnabled,
+  autonomousBehaviorEnabled,
   onPetClick,
   onPointerInteractive,
+  onCharacterGeometryChange,
   characterSettings,
 }: {
   roamingEnabled: boolean;
-  onPetClick: () => void;
+  autonomousBehaviorEnabled: boolean;
+  onPetClick: (geometry: CharacterScreenGeometry) => void;
   onPointerInteractive: (interactive: boolean) => void;
+  onCharacterGeometryChange: (
+    geometry: CharacterScreenGeometry | null,
+  ) => void;
   characterSettings: Pick<
     DesktopStageSettings,
     | "characterScale"
@@ -98,6 +120,7 @@ export default function VRMViewer({
   const hostRef = useRef<HTMLDivElement>(null);
   const onPetClickRef = useRef(onPetClick);
   const onPointerInteractiveRef = useRef(onPointerInteractive);
+  const onCharacterGeometryChangeRef = useRef(onCharacterGeometryChange);
   const characterSettingsRef = useRef(characterSettings);
   const [status, setStatus] = useState("Loading Furina...");
   const [failed, setFailed] = useState(false);
@@ -111,6 +134,7 @@ export default function VRMViewer({
   const transitionDurationRef = useRef(0.32);
   const returnTransitionDurationRef = useRef(0.5);
   const roamingEnabledRef = useRef(roamingEnabled);
+  const autonomousBehaviorEnabledRef = useRef(autonomousBehaviorEnabled);
   const roamDiagnosticsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     onPetClickRef.current = onPetClick;
@@ -119,6 +143,10 @@ export default function VRMViewer({
   useEffect(() => {
     onPointerInteractiveRef.current = onPointerInteractive;
   }, [onPointerInteractive]);
+
+  useEffect(() => {
+    onCharacterGeometryChangeRef.current = onCharacterGeometryChange;
+  }, [onCharacterGeometryChange]);
 
   useEffect(() => {
     characterSettingsRef.current = characterSettings;
@@ -132,12 +160,24 @@ export default function VRMViewer({
   }, [roamingEnabled]);
 
   useEffect(() => {
+    autonomousBehaviorEnabledRef.current = autonomousBehaviorEnabled;
+    autonomousLog(
+      "toggle",
+      `Autonomous behavior ${autonomousBehaviorEnabled ? "enabled" : "disabled"}.`,
+    );
+  }, [autonomousBehaviorEnabled]);
+
+  useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
 
     let disposed = false;
     let frameId = 0;
     let vrm: VRM | null = null;
+    autonomousLog(
+      "mount",
+      `VRMViewer mounted (mode=3d, autonomous=${autonomousBehaviorEnabledRef.current ? "on" : "off"}, electron=${typeof window.sakuraDesktop !== "undefined"}).`,
+    );
     let mixer: THREE.AnimationMixer | null = null;
     let activeAction: THREE.AnimationAction | null = null;
     let activeMotion: LoadedMotion | null = null;
@@ -161,6 +201,10 @@ export default function VRMViewer({
     let roamTargetX = 0;
     const roamStartRotation = new THREE.Quaternion();
     const roamTargetRotation = new THREE.Quaternion();
+    let autonomousWaitRemaining = 0;
+    let autonomousScheduled = false;
+    const AUTONOMOUS_GESTURE_IDS = ["wave", "presenting", "openarms"];
+    let appliedCharacterSettingsValue: typeof characterSettings | null = null;
     let originalRootX = 0;
     let modelRootBaseX = 0;
     let modelRootBaseY = 0;
@@ -173,6 +217,8 @@ export default function VRMViewer({
     let previousTime = 0;
     let modelHeight = 1;
     let modelWidth = 0;
+    let modelUnitHeight = 1;
+    let modelUnitWidth = 0;
     let modelBaseCameraDistance = 0;
     let modelViewDistance = 0;
     let originalRootY = 0;
@@ -194,6 +240,8 @@ export default function VRMViewer({
     const pointer = new THREE.Vector2();
     let canvasPointerDown: { x: number; y: number } | null = null;
     let pointerRegionActive: boolean | null = null;
+    let lastCharacterGeometryReport = 0;
+    let lastCharacterGeometry: CharacterScreenGeometry | null = null;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
@@ -236,6 +284,87 @@ export default function VRMViewer({
     const fillLight = new THREE.DirectionalLight(0x9bdcff, 1.1);
     fillLight.position.set(-2, 1, -1);
     scene.add(fillLight);
+
+    const getCharacterGeometry = () => {
+      if (!vrm) return null;
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+
+      vrm.scene.updateMatrixWorld(true);
+      camera.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(vrm.scene);
+      if (bounds.isEmpty()) return null;
+      const corners = [
+        new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.min.z),
+        new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.max.z),
+        new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.min.z),
+        new THREE.Vector3(bounds.min.x, bounds.max.y, bounds.max.z),
+        new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.min.z),
+        new THREE.Vector3(bounds.max.x, bounds.min.y, bounds.max.z),
+        new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.min.z),
+        new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.max.z),
+      ];
+      const projected = corners.map((corner) =>
+        corner.project(camera),
+      );
+      const visible = projected.filter(
+        (point) => point.z >= -1 && point.z <= 1,
+      );
+      if (visible.length === 0) return null;
+
+      const left = Math.max(
+        0,
+        Math.min(...visible.map((point) => ((point.x + 1) * rect.width) / 2)),
+      );
+      const right = Math.min(
+        rect.width,
+        Math.max(...visible.map((point) => ((point.x + 1) * rect.width) / 2)),
+      );
+      const top = Math.max(
+        0,
+        Math.min(...visible.map((point) => ((1 - point.y) * rect.height) / 2)),
+      );
+      const bottom = Math.min(
+        rect.height,
+        Math.max(...visible.map((point) => ((1 - point.y) * rect.height) / 2)),
+      );
+      if (right < left || bottom < top) return null;
+
+      return {
+        viewportWidth: rect.width,
+        viewportHeight: rect.height,
+        left,
+        top,
+        right,
+        bottom,
+        anchorX: right,
+        anchorY: bottom,
+      } satisfies CharacterScreenGeometry;
+    };
+
+    const reportCharacterGeometry = (time: number, force = false) => {
+      if (!force && time - lastCharacterGeometryReport < 33) return;
+      lastCharacterGeometryReport = time;
+      const geometry = getCharacterGeometry();
+      if (!geometry) return;
+      const previous = lastCharacterGeometry;
+      if (
+        !force &&
+        previous &&
+        Math.abs(previous.anchorX - geometry.anchorX) < 0.75 &&
+        Math.abs(previous.anchorY - geometry.anchorY) < 0.75 &&
+        Math.abs(previous.left - geometry.left) < 0.75 &&
+        Math.abs(previous.top - geometry.top) < 0.75 &&
+        Math.abs(previous.right - geometry.right) < 0.75 &&
+        Math.abs(previous.bottom - geometry.bottom) < 0.75 &&
+        previous.viewportWidth === geometry.viewportWidth &&
+        previous.viewportHeight === geometry.viewportHeight
+      ) {
+        return;
+      }
+      lastCharacterGeometry = geometry;
+      onCharacterGeometryChangeRef.current(geometry);
+    };
 
     const updateCanvasPointer = (event: MouseEvent) => {
       if (!vrm) return;
@@ -287,7 +416,12 @@ export default function VRMViewer({
       pointerRegionActive = hit;
       onPointerInteractiveRef.current(hit);
       if (hit) {
-        onPetClickRef.current();
+        const geometry = getCharacterGeometry();
+        if (geometry) {
+          lastCharacterGeometry = geometry;
+          onCharacterGeometryChangeRef.current(geometry);
+          onPetClickRef.current(geometry);
+        }
       }
     };
 
@@ -301,37 +435,46 @@ export default function VRMViewer({
       if (modelWidth <= 0 || modelBaseCameraDistance <= 0) return;
 
       const tangent = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
-      const horizontalMargin = modelHeight * 0.035;
-      const roamAllowance = modelHeight * 0.25;
+      const stageHeightScale =
+        Math.max(host.clientHeight, 1) /
+        DEFAULT_DESKTOP_STAGE_SETTINGS.height;
+      const horizontalMargin = modelUnitHeight * 0.035;
+      const roamAllowance = modelUnitHeight * 0.25;
       const requiredHalfWidth =
-        modelWidth / 2 + horizontalMargin + roamAllowance;
+        modelUnitWidth / 2 + horizontalMargin + roamAllowance;
       const requiredDistanceForWidth =
-        requiredHalfWidth / (tangent * camera.aspect);
+        (requiredHalfWidth * stageHeightScale) /
+        (tangent * camera.aspect);
       const requiredDistanceForHeight =
-        (modelHeight / 2 + modelHeight * 0.2 + modelHeight * 0.035) /
+        ((modelUnitHeight / 2 +
+          modelUnitHeight * 0.27 +
+          modelUnitHeight * 0.035) *
+          stageHeightScale) /
         tangent;
 
       modelViewDistance = Math.max(
-        modelBaseCameraDistance,
+        modelUnitHeight * 1.7 * stageHeightScale,
         requiredDistanceForWidth,
         requiredDistanceForHeight,
       );
+      modelBaseCameraDistance = modelUnitHeight * 1.7 * stageHeightScale;
       camera.position
         .copy(cameraTarget)
         .addScaledVector(cameraDirection, modelViewDistance);
       camera.lookAt(cameraTarget);
 
       const visibleHalfWidth = tangent * modelViewDistance * camera.aspect;
+      const actualHorizontalMargin = modelHeight * 0.035;
       maximumRoamOffset = Math.max(
         0,
-        visibleHalfWidth - modelWidth / 2 - horizontalMargin,
+        visibleHalfWidth - modelWidth / 2 - actualHorizontalMargin,
       );
       const visibleHalfHeight = tangent * modelViewDistance;
       maximumVerticalOffset = Math.max(
         0,
         visibleHalfHeight -
           modelHeight / 2 -
-          horizontalMargin -
+          actualHorizontalMargin -
           Math.abs(cameraTarget.y - modelStageCenter.y),
       );
     };
@@ -348,6 +491,16 @@ export default function VRMViewer({
         settings.walkingSpeed,
       ].join(":");
       if (!force && settingsKey === appliedCharacterSettings) return;
+      const previousSettings = appliedCharacterSettingsValue;
+      const preserveCurrentPosition =
+        previousSettings !== null &&
+        settings.characterScale !== previousSettings.characterScale &&
+        settings.characterX === previousSettings.characterX &&
+        settings.characterY === previousSettings.characterY &&
+        settings.facingDegrees === previousSettings.facingDegrees &&
+        settings.walkingSpeed === previousSettings.walkingSpeed;
+      const previousRootX = vrm.scene.position.x;
+      const previousRootY = vrm.scene.position.y;
 
       if (roamPhase !== "waiting") {
         roamPhase = "waiting";
@@ -374,6 +527,8 @@ export default function VRMViewer({
       const center = bounds.getCenter(new THREE.Vector3());
       modelHeight = Math.max(size.y, 0.1);
       modelWidth = size.x;
+      modelUnitHeight = modelHeight / settings.characterScale;
+      modelUnitWidth = modelWidth / settings.characterScale;
       modelStageCenter.set(
         center.x - vrm.scene.position.x,
         center.y - vrm.scene.position.y,
@@ -389,9 +544,20 @@ export default function VRMViewer({
 
       originalRootX = modelRootBaseX;
       originalRootY = modelRootBaseY + settings.characterY * maximumVerticalOffset;
-      vrm.scene.position.x =
-        originalRootX + settings.characterX * maximumRoamOffset;
-      vrm.scene.position.y = originalRootY;
+      vrm.scene.position.x = preserveCurrentPosition
+        ? THREE.MathUtils.clamp(
+            previousRootX,
+            originalRootX - maximumRoamOffset,
+            originalRootX + maximumRoamOffset,
+          )
+        : originalRootX + settings.characterX * maximumRoamOffset;
+      vrm.scene.position.y = preserveCurrentPosition
+        ? THREE.MathUtils.clamp(
+            previousRootY,
+            originalRootY - maximumVerticalOffset,
+            originalRootY + maximumVerticalOffset,
+          )
+        : originalRootY;
       originalRootRotation
         .copy(modelBaseRotation)
         .multiply(
@@ -401,6 +567,7 @@ export default function VRMViewer({
           ),
         );
       appliedCharacterSettings = settingsKey;
+      appliedCharacterSettingsValue = { ...settings };
     };
 
     const resize = () => {
@@ -600,6 +767,12 @@ export default function VRMViewer({
 
       const finishedMotion = activeMotion;
       const finishedId = activeMotion?.definition.id ?? null;
+      if (finishedId && finishedId !== "idle") {
+        autonomousLog(
+          "finish",
+          `Motion "${finishedMotion?.definition.label ?? finishedId}" finished; returning to ${behaviorController.base}.`,
+        );
+      }
       let returnBehavior = behaviorController.base;
       if (activeBehaviorToken !== null) {
         returnBehavior = behaviorController.finishTemporary(activeBehaviorToken);
@@ -952,6 +1125,12 @@ export default function VRMViewer({
           trackLayout: getTrackLayout(clip),
         };
         motionsById.set(definition.id, loadedMotion);
+        if (AUTONOMOUS_GESTURE_IDS.includes(definition.id)) {
+          autonomousLog(
+            "motion load",
+            `Autonomous motion "${definition.id}" loaded successfully (${retargetedTracks.length}/${expectedTracks} retargeted tracks).`,
+          );
+        }
         const state: MotionLoadState =
           skippedTracks.length > 0 ? "partial" : "ready";
         const remappedTracks: string[] = [];
@@ -1033,6 +1212,12 @@ export default function VRMViewer({
               `Furina motion "${definition.id}" failed (${definition.source}):`,
               error,
             );
+            if (AUTONOMOUS_GESTURE_IDS.includes(definition.id)) {
+              autonomousLog(
+                "motion load",
+                `Autonomous motion "${definition.id}" FAILED: ${message}`,
+              );
+            }
             updateMotionDebugItem(definition.id, {
               state: "failed",
               message,
@@ -1044,6 +1229,15 @@ export default function VRMViewer({
 
       if (disposed) return;
       motionManifestLoaded = true;
+
+      const loadedCount = motionsById.size;
+      const autonomousLoaded = AUTONOMOUS_GESTURE_IDS.filter((id) =>
+        motionsById.has(id),
+      );
+      autonomousLog(
+        "manifest",
+        `Motion manifest loaded: ${loadedCount} motions total, ${autonomousLoaded.length}/${AUTONOMOUS_GESTURE_IDS.length} autonomous gestures available (${autonomousLoaded.join(", ")}).`,
+      );
 
       if (motionsById.has("idle")) {
         playIdleMotion();
@@ -1093,12 +1287,18 @@ export default function VRMViewer({
         const center = bounds.getCenter(new THREE.Vector3());
         modelHeight = Math.max(size.y, 0.1);
         modelWidth = size.x;
+        modelUnitHeight = modelHeight;
+        modelUnitWidth = modelWidth;
         modelRootBaseY = vrm.scene.position.y;
         modelRootBaseX = vrm.scene.position.x;
         originalRootY = modelRootBaseY;
         originalRootX = modelRootBaseX;
         modelBaseRotation.copy(vrm.scene.quaternion);
         modelStageCenter.copy(center);
+        autonomousLog(
+          "vrml load",
+          `VRM model loaded (metaVersion=${vrm.meta.metaVersion}, humanoid bones detected).`,
+        );
 
         camera.fov = 30;
         camera.position.set(
@@ -1299,6 +1499,96 @@ export default function VRMViewer({
       }
     };
 
+    const scheduleAutonomousGesture = () => {
+      autonomousWaitRemaining = 20 + Math.random() * 25;
+      autonomousScheduled = true;
+      autonomousLog(
+        "schedule",
+        `Next autonomous gesture in ${autonomousWaitRemaining.toFixed(1)}s.`,
+      );
+    };
+
+    const cancelAutonomousGesture = (reason?: string) => {
+      autonomousScheduled = false;
+      autonomousWaitRemaining = 0;
+      if (reason) autonomousLog("cancel", reason);
+    };
+
+    const playAutonomousGesture = () => {
+      if (!autonomousBehaviorEnabledRef.current) return;
+      if (knockInProgress) {
+        cancelAutonomousGesture("Blocked: knock in progress.");
+        return;
+      }
+
+      const eligible = AUTONOMOUS_GESTURE_IDS.filter((id) =>
+        motionsById.has(id),
+      );
+
+      if (eligible.length === 0) {
+        autonomousLog(
+          "eligibility",
+          "No eligible autonomous motions loaded (wave/presenting/openarms).",
+        );
+        cancelAutonomousGesture();
+        return;
+      }
+
+      autonomousLog(
+        "eligibility",
+        `Eligible loaded motions: ${eligible.join(", ")}.`,
+      );
+
+      const id = eligible[Math.floor(Math.random() * eligible.length)];
+      const motion = motionsById.get(id);
+      if (!motion) return;
+
+      if (!behaviorController.acceptsMotion(motion.definition)) {
+        autonomousLog(
+          "blocked",
+          `Motion "${motion.definition.label}" blocked by active behavior priority.`,
+        );
+        scheduleAutonomousGesture();
+        return;
+      }
+
+      const started = playMotion(motion, transitionDurationRef.current);
+      if (!started) {
+        autonomousLog("blocked", `Motion "${motion.definition.label}" failed to start.`);
+        scheduleAutonomousGesture();
+      } else {
+        autonomousLog("start", `Playing autonomous gesture "${motion.definition.label}".`);
+      }
+    };
+
+    const updateAutonomous = (delta: number) => {
+      if (!autonomousBehaviorEnabledRef.current) {
+        cancelAutonomousGesture("Disabled by toggle.");
+        return;
+      }
+
+      if (
+        knockInProgress ||
+        roamPhase !== "waiting" ||
+        activeMotion?.definition.id !== "idle"
+      ) {
+        return;
+      }
+
+      if (!autonomousScheduled) {
+        scheduleAutonomousGesture();
+        return;
+      }
+
+      autonomousWaitRemaining -= delta;
+      if (autonomousWaitRemaining <= 0) {
+        autonomousScheduled = false;
+        autonomousWaitRemaining = 0;
+        autonomousLog("expire", "Autonomous wait expired; selecting a gesture.");
+        playAutonomousGesture();
+      }
+    };
+
     const updateRoaming = (delta: number) => {
       if (!vrm) return;
       behaviorController.setPaused(!roamingEnabledRef.current);
@@ -1434,6 +1724,7 @@ export default function VRMViewer({
         mixer?.update(delta);
         const rootXAfterMixer = vrm.scene.position.x;
         updateRoaming(delta);
+        updateAutonomous(delta);
         const rootXAfterRoaming = vrm.scene.position.x;
 
         if (SHOW_MOTION_DEBUG && seconds - lastRoamDiagnosticAt >= 0.25) {
@@ -1536,6 +1827,7 @@ export default function VRMViewer({
       }
 
       renderer.render(scene, camera);
+      reportCharacterGeometry(time);
       frameId = window.requestAnimationFrame(animate);
     };
 
@@ -1543,6 +1835,10 @@ export default function VRMViewer({
 
     return () => {
       disposed = true;
+      autonomousLog(
+        "unmount",
+        "VRMViewer unmounted; autonomous scheduler stopped.",
+      );
       if (knockInProgress) {
         knockInProgress = false;
         window.sakuraDesktop?.completeKnock?.();
@@ -1567,6 +1863,7 @@ export default function VRMViewer({
         handleCanvasPointerLeave,
       );
       onPointerInteractiveRef.current(false);
+      onCharacterGeometryChangeRef.current(null);
       window.cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
 
