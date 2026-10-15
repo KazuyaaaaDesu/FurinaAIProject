@@ -11,17 +11,14 @@ import {
   VRMUtils,
   type VRM,
 } from "@pixiv/three-vrm";
+import {
+  isMotionManifest,
+  PetBehaviorController,
+  type MotionDefinition,
+} from "./petBehavior";
 
 type Emotion = "neutral" | "happy" | "relaxed" | "surprised" | "sad";
 
-type MotionDefinition = {
-  id: string;
-  label: string;
-  source: string;
-  loop?: boolean;
-};
-
-type MotionManifest = MotionDefinition[];
 type MotionLoadState = "loading" | "ready" | "partial" | "failed";
 
 type MotionDebugItem = MotionDefinition & {
@@ -79,39 +76,15 @@ function getTrackLayout(clip: THREE.AnimationClip) {
     .join("|");
 }
 
-function isMotionManifest(value: unknown): value is MotionManifest {
-  if (!Array.isArray(value)) return false;
-
-  const ids = new Set<string>();
-
-  return value.every((item) => {
-    if (typeof item !== "object" || item === null || Array.isArray(item)) {
-      return false;
-    }
-
-    const entry = item as Record<string, unknown>;
-    if (
-      typeof entry.id !== "string" ||
-      !/^[a-z0-9-]+$/i.test(entry.id) ||
-      ids.has(entry.id) ||
-      typeof entry.label !== "string" ||
-      typeof entry.source !== "string" ||
-      (entry.loop !== undefined && typeof entry.loop !== "boolean")
-    ) {
-      return false;
-    }
-
-    ids.add(entry.id);
-    return true;
-  });
-}
-
 export default function VRMViewer({
   roamingEnabled,
+  onPetClick,
 }: {
   roamingEnabled: boolean;
+  onPetClick: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const onPetClickRef = useRef(onPetClick);
   const [status, setStatus] = useState("Loading Furina...");
   const [failed, setFailed] = useState(false);
   const [motionDebugItems, setMotionDebugItems] = useState<MotionDebugItem[]>(
@@ -125,6 +98,10 @@ export default function VRMViewer({
   const returnTransitionDurationRef = useRef(0.5);
   const roamingEnabledRef = useRef(roamingEnabled);
   const roamDiagnosticsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    onPetClickRef.current = onPetClick;
+  }, [onPetClick]);
+
   useEffect(() => {
     roamingEnabledRef.current = roamingEnabled;
     console.info(
@@ -144,6 +121,12 @@ export default function VRMViewer({
     let activeMotion: LoadedMotion | null = null;
     let transition: MotionTransition | null = null;
     let controlledActions = new Map<THREE.AnimationAction, number>();
+    const behaviorController = new PetBehaviorController();
+    let activeBehaviorToken: number | null = null;
+    let reactionBehaviorToken: number | null = null;
+    let reactionTimer: number | null = null;
+    let pendingMotionId: string | null = null;
+    let motionManifestLoaded = false;
     let knockInProgress = false;
     let pendingKnock = false;
     let knockCyclesCompleted = 0;
@@ -176,9 +159,12 @@ export default function VRMViewer({
     let blinkStartedAt = -1;
 
     const motionsById = new Map<string, LoadedMotion>();
+    const motionDefinitionsById = new Map<string, MotionDefinition>();
     const availableExpressions = new Set<string>();
     const targetExpressions: Record<string, number> = {};
     const currentExpressions: Record<string, number> = {};
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
@@ -221,6 +207,23 @@ export default function VRMViewer({
     const fillLight = new THREE.DirectionalLight(0x9bdcff, 1.1);
     fillLight.position.set(-2, 1, -1);
     scene.add(fillLight);
+
+    const handleCanvasClick = (event: MouseEvent) => {
+      if (!vrm) return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      pointer.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -(((event.clientY - rect.top) / rect.height) * 2 - 1),
+      );
+      raycaster.setFromCamera(pointer, camera);
+      if (raycaster.intersectObject(vrm.scene, true).length > 0) {
+        onPetClickRef.current();
+      }
+    };
+
+    renderer.domElement.addEventListener("click", handleCanvasClick);
 
     const updateCameraFraming = () => {
       if (modelWidth <= 0 || modelBaseCameraDistance <= 0) return;
@@ -310,6 +313,16 @@ export default function VRMViewer({
     ) => {
       if (!mixer || !vrm) return false;
       if (knockInProgress && motion.definition.id !== "wave") return false;
+      const isKnockMotion = knockInProgress && motion.definition.id === "wave";
+      if (
+        !isKnockMotion &&
+        !behaviorController.acceptsMotion(motion.definition)
+      ) {
+        console.info(
+          `Ignoring "${motion.definition.label}" because a higher-priority behavior is active.`,
+        );
+        return false;
+      }
 
       if (
         activeMotion?.definition.id === motion.definition.id &&
@@ -350,6 +363,11 @@ export default function VRMViewer({
         );
         return false;
       }
+
+      const behaviorToken = behaviorController.beginMotion(motion.definition);
+      if (behaviorToken === false) return false;
+      activeBehaviorToken =
+        typeof behaviorToken === "number" ? behaviorToken : null;
 
       const from = new Map(
         [...controlledActions].filter(([, weight]) => weight > 0.0001),
@@ -427,15 +445,44 @@ export default function VRMViewer({
         return;
       }
 
+      const finishedMotion = activeMotion;
       const finishedId = activeMotion?.definition.id ?? null;
+      let returnBehavior = behaviorController.base;
+      if (activeBehaviorToken !== null) {
+        returnBehavior = behaviorController.finishTemporary(activeBehaviorToken);
+        activeBehaviorToken = null;
+      }
+
+      if (returnBehavior === "walking" && roamingEnabledRef.current) {
+        roamWaitRemaining = 0;
+      }
+
       if (finishedId !== "idle") {
-        playIdleMotion(returnTransitionDurationRef.current);
+        const returnMotionId =
+          finishedMotion?.definition.returnBehavior === "previous" &&
+          returnBehavior === "talking"
+            ? "talking"
+            : "idle";
+        const returnMotion = motionsById.get(returnMotionId);
+        if (returnMotion) {
+          playMotion(returnMotion, returnTransitionDurationRef.current);
+        } else {
+          playIdleMotion(returnTransitionDurationRef.current);
+        }
       }
     };
 
     const playMotionById = (id: string, repetitions?: number) => {
       const motion = motionsById.get(id);
       if (!motion) {
+        const definition = motionDefinitionsById.get(id);
+        if (definition?.fallbackBehavior === "idle") {
+          console.warn(
+            `Furina motion "${id}" is unavailable; using its declared idle fallback.`,
+          );
+          playIdleMotion();
+          return false;
+        }
         console.warn(`Furina motion "${id}" is not loaded and cannot be played.`);
         return false;
       }
@@ -447,15 +494,23 @@ export default function VRMViewer({
       if (!knockInProgress) return;
       knockInProgress = false;
       pendingKnock = false;
+      if (activeBehaviorToken !== null) {
+        behaviorController.finishTemporary(activeBehaviorToken);
+        activeBehaviorToken = null;
+      }
       if (knockPauseTimer !== null) {
         window.clearTimeout(knockPauseTimer);
         knockPauseTimer = null;
+      }
+      if (reactionTimer !== null) {
+        window.clearTimeout(reactionTimer);
+        reactionTimer = null;
       }
       roamPhase = "stopping";
       roamStopElapsed = 0;
       if (vrm) roamStartRotation.copy(vrm.scene.quaternion);
       playIdleMotion(returnTransitionDurationRef.current);
-      window.sakuraDesktop?.completeKnock();
+      window.sakuraDesktop?.completeKnock?.();
     };
 
     const startKnockGesture = () => {
@@ -529,14 +584,37 @@ export default function VRMViewer({
         EMOTION_NAMES.includes(emotion as (typeof EMOTION_NAMES)[number])
       ) {
         setEmotion(emotion as Emotion);
+        const token = behaviorController.beginReaction(35);
+        if (token !== null) {
+          if (reactionTimer !== null) {
+            window.clearTimeout(reactionTimer);
+          }
+          reactionBehaviorToken = token;
+          reactionTimer = window.setTimeout(() => {
+            reactionTimer = null;
+            if (reactionBehaviorToken === token) {
+              behaviorController.finishTemporary(token);
+              reactionBehaviorToken = null;
+            }
+          }, 1400);
+        }
       }
     };
 
     const handleKnock = () => {
       if (knockInProgress) return;
+      if (reactionTimer !== null) {
+        window.clearTimeout(reactionTimer);
+        reactionTimer = null;
+      }
+      reactionBehaviorToken = null;
+      activeBehaviorToken = null;
+      behaviorController.cancelTemporary();
       knockInProgress = true;
       setEmotion("surprised");
-      startKnockGesture();
+      if (!startKnockGesture() && !pendingKnock) {
+        finishKnock();
+      }
     };
 
     const handleGestureEvent = (event: Event) => {
@@ -547,10 +625,15 @@ export default function VRMViewer({
     const handlePlayMotionEvent = (event: Event) => {
       const motionId = (event as CustomEvent<string>).detail;
       if (knockInProgress) return;
-      if (typeof motionId === "string") playMotionById(motionId);
+      if (typeof motionId !== "string") return;
+      if (!motionManifestLoaded) {
+        pendingMotionId = motionId;
+        return;
+      }
+      playMotionById(motionId);
     };
 
-    const unsubscribeKnock = window.sakuraDesktop?.onKnock(handleKnock);
+    const unsubscribeKnock = window.sakuraDesktop?.onKnock?.(handleKnock);
     window.addEventListener("fufuu:emotion", handleEmotion);
     window.addEventListener("fufuu:gesture", handleGestureEvent);
     window.addEventListener("fufuu:play-motion", handlePlayMotionEvent);
@@ -765,6 +848,10 @@ export default function VRMViewer({
       }
 
       const definitions = value;
+      motionDefinitionsById.clear();
+      for (const definition of definitions) {
+        motionDefinitionsById.set(definition.id, definition);
+      }
       if (!disposed) {
         setMotionDebugItems(
           definitions.map((definition) => ({
@@ -803,6 +890,7 @@ export default function VRMViewer({
       );
 
       if (disposed) return;
+      motionManifestLoaded = true;
 
       if (motionsById.has("idle")) {
         playIdleMotion();
@@ -815,6 +903,10 @@ export default function VRMViewer({
       if (pendingKnock && !startKnockGesture()) {
         console.warn("Knock gesture could not start because Wave did not load.");
         finishKnock();
+      } else if (pendingMotionId !== null) {
+        const motionId = pendingMotionId;
+        pendingMotionId = null;
+        playMotionById(motionId);
       }
     };
 
@@ -923,6 +1015,11 @@ export default function VRMViewer({
               id: "embedded-motion",
               label: gltf.animations[0]?.name || "Embedded motion",
               source: "/models/furina.vrm",
+              loop: false,
+              category: "interaction",
+              priority: 40,
+              returnBehavior: "idle",
+              fallbackBehavior: null,
             };
             motionsById.set(definition.id, {
               definition,
@@ -938,10 +1035,13 @@ export default function VRMViewer({
         try {
           await loadMotionManifest();
         } catch (error) {
+          motionManifestLoaded = true;
           console.error("Furina motion manifest failed to load:", error);
           console.warn(
             "No configured VRMA motions are available; Furina will preserve her imported rest pose.",
           );
+          pendingMotionId = null;
+          if (pendingKnock) finishKnock();
         }
       } catch (error) {
         if (disposed) return;
@@ -1034,6 +1134,7 @@ export default function VRMViewer({
 
       roamPhase = "stopping";
       roamStopElapsed = 0;
+      behaviorController.setBase("idle");
       if (vrm) roamStartRotation.copy(vrm.scene.quaternion);
       if (activeMotion?.definition.id === "walking") {
         playIdleMotion(returnTransitionDurationRef.current);
@@ -1042,6 +1143,7 @@ export default function VRMViewer({
 
     const updateRoaming = (delta: number) => {
       if (!vrm) return;
+      behaviorController.setPaused(!roamingEnabledRef.current);
 
       if (roamingEnabledRef.current && !loggedRoamingReady) {
         loggedRoamingReady = true;
@@ -1201,7 +1303,8 @@ export default function VRMViewer({
 
           if (roamDiagnosticsRef.current) {
             roamDiagnosticsRef.current.textContent =
-              `Roaming ${phase} · motion ${activeMotion?.definition.id ?? "none"} · ` +
+              `Behavior ${behaviorController.current} · roaming ${phase} · ` +
+              `motion ${activeMotion?.definition.id ?? "none"} · ` +
               `root X ${rootXBeforeMixer.toFixed(3)} → mixer ${rootXAfterMixer.toFixed(3)} → ` +
               `movement ${rootXAfterRoaming.toFixed(3)} · ` +
               `${mixerStatus} · limit ±${maximumRoamOffset.toFixed(3)}`;
@@ -1282,7 +1385,7 @@ export default function VRMViewer({
       disposed = true;
       if (knockInProgress) {
         knockInProgress = false;
-        window.sakuraDesktop?.completeKnock();
+        window.sakuraDesktop?.completeKnock?.();
       }
       if (knockPauseTimer !== null) {
         window.clearTimeout(knockPauseTimer);
@@ -1292,6 +1395,7 @@ export default function VRMViewer({
       window.removeEventListener("fufuu:gesture", handleGestureEvent);
       window.removeEventListener("fufuu:play-motion", handlePlayMotionEvent);
       unsubscribeKnock?.();
+      renderer.domElement.removeEventListener("click", handleCanvasClick);
       window.cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
 

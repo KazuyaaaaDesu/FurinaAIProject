@@ -3,88 +3,170 @@
     "id": "idle",
     "label": "Idle",
     "source": "/motions/furina-Idle.vrma",
-    "loop": true
+    "loop": true,
+    "category": "idle",
+    "priority": 0,
+    "returnBehavior": "idle",
+    "fallbackBehavior": null
   },
   {
     "id": "armscrossed",
     "label": "Arms crossed",
-    "source": "/motions/furina-armscrossed.vrma"
+    "source": "/motions/furina-armscrossed.vrma",
+    "loop": false,
+    "category": "pose",
+    "priority": 25,
+    "returnBehavior": "idle",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "armsup",
     "label": "Arms up",
-    "source": "/motions/furina-armsup.vrma"
+    "source": "/motions/furina-armsup.vrma",
+    "loop": false,
+    "category": "pose",
+    "priority": 25,
+    "returnBehavior": "idle",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "bow",
     "label": "Bow",
-    "source": "/motions/furina-bow.vrma"
+    "source": "/motions/furina-bow.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "dance",
     "label": "Dance",
-    "source": "/motions/furina-dance.vrma"
+    "source": "/motions/furina-dance.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "fightingstance",
     "label": "Fighting stance",
-    "source": "/motions/furina-fightingstance.vrma"
+    "source": "/motions/furina-fightingstance.vrma",
+    "loop": false,
+    "category": "pose",
+    "priority": 25,
+    "returnBehavior": "idle",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "handbehindhead",
     "label": "Hand behind head",
-    "source": "/motions/furina-handbehindhead.vrma"
+    "source": "/motions/furina-handbehindhead.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "handsonhips",
     "label": "Hands on hips",
-    "source": "/motions/furina-handsonhips.vrma"
+    "source": "/motions/furina-handsonhips.vrma",
+    "loop": false,
+    "category": "pose",
+    "priority": 25,
+    "returnBehavior": "idle",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "nein",
     "label": "Nein",
-    "source": "/motions/furina-nein.vrma"
+    "source": "/motions/furina-nein.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "openarms",
     "label": "Open arms",
-    "source": "/motions/furina-openarms.vrma"
+    "source": "/motions/furina-openarms.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "pointing",
     "label": "Pointing",
-    "source": "/motions/furina-pointing.vrma"
+    "source": "/motions/furina-pointing.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "presenting",
     "label": "Presenting",
-    "source": "/motions/furina-presenting.vrma"
+    "source": "/motions/furina-presenting.vrma",
+    "loop": false,
+    "category": "interaction",
+    "priority": 40,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "running",
     "label": "Running",
-    "source": "/motions/furina-running.vrma"
+    "source": "/motions/furina-running.vrma",
+    "loop": false,
+    "category": "pose",
+    "priority": 25,
+    "returnBehavior": "idle",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "sitting",
     "label": "Sitting",
-    "source": "/motions/furina-sitting.vrma"
+    "source": "/motions/furina-sitting.vrma",
+    "loop": false,
+    "category": "pose",
+    "priority": 25,
+    "returnBehavior": "idle",
+    "fallbackBehavior": "idle"
   },
   {
     "id": "talking",
     "label": "Talking",
     "source": "/motions/furina-talking.vrma",
-    "loop": true
+    "loop": true,
+    "category": "speech",
+    "priority": 20,
+    "returnBehavior": "previous",
+    "fallbackBehavior": null
   },
   {
     "id": "walking",
     "label": "Walking",
     "source": "/motions/furina-walk-animation.vrma",
-    "loop": true
+    "loop": true,
+    "category": "locomotion",
+    "priority": 10,
+    "returnBehavior": "idle",
+    "fallbackBehavior": null
   },
   {
     "id": "wave",
     "label": "Wave",
-    "source": "/motions/furina-wave.vrma"
+    "source": "/motions/furina-wave.vrma",
+    "loop": false,
+    "category": "greeting",
+    "priority": 30,
+    "returnBehavior": "previous",
+    "fallbackBehavior": "idle"
   }
 ]

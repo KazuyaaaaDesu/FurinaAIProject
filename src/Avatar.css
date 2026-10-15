@@ -472,6 +472,8 @@ body.avatar-mode #root {
   display: block;
   width: 100% !important;
   height: 100% !important;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .fufuu-vrm-status {
@@ -547,6 +549,105 @@ body.avatar-mode #root {
 
 .fufuu-knock-button {
   color: #7e467d;
+}
+
+/* ---------- Contextual pet toolbar ---------- */
+
+.fufuu-pet-toolbar {
+  position: absolute;
+  top: 48px;
+  right: 10px;
+  z-index: 35;
+  box-sizing: border-box;
+  width: min(250px, calc(100% - 20px));
+  max-height: calc(100% - 100px);
+  overflow: hidden auto;
+  padding: 10px;
+  border: 1px solid #fff8;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #fff5fcf5, #f6dff0f2);
+  color: #71375f;
+  font: 12px "Segoe UI", sans-serif;
+  box-shadow: 0 10px 32px #50244555, inset 0 1px #fff;
+  -webkit-app-region: no-drag;
+}
+
+.fufuu-pet-toolbar-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.fufuu-pet-toolbar-heading button,
+.fufuu-pet-toolbar-actions button,
+.fufuu-pet-toolbar-panel button {
+  min-height: 30px;
+  border: 1px solid #d99bc4a8;
+  border-radius: 10px;
+  background: #fffafde8;
+  color: #783d68;
+  font: 650 11px "Segoe UI", sans-serif;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.fufuu-pet-toolbar-heading button {
+  width: 28px;
+  min-height: 28px;
+  border-radius: 50%;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.fufuu-pet-toolbar-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.fufuu-pet-toolbar-actions button:hover,
+.fufuu-pet-toolbar-panel button:hover,
+.fufuu-pet-toolbar-heading button:hover {
+  background: #fff;
+  border-color: #cb70aa;
+}
+
+.fufuu-pet-toolbar-actions button:focus-visible,
+.fufuu-pet-toolbar-panel button:focus-visible,
+.fufuu-pet-toolbar-heading button:focus-visible {
+  outline: 2px solid #a64f89;
+  outline-offset: 1px;
+}
+
+.fufuu-pet-toolbar-panel {
+  display: grid;
+  gap: 6px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid #d99bc466;
+}
+
+.fufuu-pet-toolbar-panel strong {
+  margin-bottom: 2px;
+}
+
+.fufuu-pet-toolbar-panel button {
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+}
+
+.fufuu-pet-toolbar-panel p {
+  margin: 2px 0;
+  color: #704c66;
+  line-height: 1.4;
+}
+
+.fufuu-pet-toolbar-panel [role="alert"] {
+  color: #9e233f;
 }
 
 /* ---------- Chat button ---------- */

@@ -13,6 +13,8 @@ const SPEECH_BRIDGE_URL = "http://127.0.0.1:4318";
 const CONVERSATION_ID = "sakura-main";
 const EMOTION_CHANNEL = "fufuu-avatar-emotion";
 const DISPLAY_MODE_CHANNEL = "fufuu-display-mode";
+const AVATAR_COMMAND_KEY = "fufuu-avatar-command";
+const AVATAR_COMMAND_CHANNEL = "fufuu-avatar-command";
 
 const MAX_MEMORIES = 200;
 const MAX_MEMORY_LENGTH = 1000;
@@ -517,6 +519,69 @@ function ChatApp() {
   }, []);
 
   useEffect(() => {
+    const handleAvatarCommand = (value: unknown) => {
+      if (typeof value !== "object" || value === null) return;
+      const command = value as Record<string, unknown>;
+      if (
+        typeof command.id !== "string" ||
+        command.action !== "memories"
+      ) {
+        return;
+      }
+
+      setMemoryPanelOpen(true);
+      try {
+        const stored = window.localStorage.getItem(AVATAR_COMMAND_KEY);
+        if (stored) {
+          const storedCommand: unknown = JSON.parse(stored);
+          if (
+            typeof storedCommand === "object" &&
+            storedCommand !== null &&
+            (storedCommand as Record<string, unknown>).id === command.id
+          ) {
+            window.localStorage.removeItem(AVATAR_COMMAND_KEY);
+          }
+        }
+      } catch (error) {
+        console.warn("[Fufuu] Could not clear the handled avatar command:", error);
+      }
+    };
+
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== AVATAR_COMMAND_KEY || !event.newValue) return;
+      try {
+        handleAvatarCommand(JSON.parse(event.newValue) as unknown);
+      } catch (error) {
+        console.warn("[Fufuu] Could not read an avatar toolbar command:", error);
+      }
+    };
+
+    const channel =
+      typeof BroadcastChannel === "undefined"
+        ? null
+        : new BroadcastChannel(AVATAR_COMMAND_CHANNEL);
+    const handleBroadcast = (event: MessageEvent<unknown>) => {
+      handleAvatarCommand(event.data);
+    };
+
+    channel?.addEventListener("message", handleBroadcast);
+    window.addEventListener("storage", handleStorage);
+
+    try {
+      const stored = window.localStorage.getItem(AVATAR_COMMAND_KEY);
+      if (stored) handleAvatarCommand(JSON.parse(stored) as unknown);
+    } catch (error) {
+      console.warn("[Fufuu] Could not read a pending avatar toolbar command:", error);
+    }
+
+    return () => {
+      channel?.removeEventListener("message", handleBroadcast);
+      channel?.close();
+      window.removeEventListener("storage", handleStorage);
+    };
+  }, []);
+
+  useEffect(() => {
     window.localStorage.setItem("fufuu-display-mode", displayMode);
 
     if (typeof BroadcastChannel !== "undefined") {
@@ -525,11 +590,11 @@ function ChatApp() {
       channel.close();
     }
 
-    window.sakuraDesktop?.setDisplayMode(displayMode);
+    window.sakuraDesktop?.setDisplayMode?.(displayMode);
   }, [displayMode]);
 
   useEffect(() => {
-    const unsubscribe = window.sakuraDesktop?.onDisplayMode((mode) => {
+    const unsubscribe = window.sakuraDesktop?.onDisplayMode?.((mode) => {
       setDisplayMode(mode);
     });
 

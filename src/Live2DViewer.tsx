@@ -124,10 +124,19 @@ function isFufuuEmotion(value: unknown): value is FufuuEmotion {
   );
 }
 
-export default function Live2DViewer() {
+export default function Live2DViewer({
+  onPetClick,
+}: {
+  onPetClick: () => void;
+}) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const onPetClickRef = useRef(onPetClick);
   const [status, setStatus] = useState("Loading Furina…");
   const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    onPetClickRef.current = onPetClick;
+  }, [onPetClick]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -140,6 +149,7 @@ export default function Live2DViewer() {
     let pointerTargetY = 0;
     let pointerX = 0;
     let pointerY = 0;
+    let pointerDownAt: { x: number; y: number } | null = null;
     let pendingExpressionIndex: number | null = null;
     let lastExpressionIndex: number | null = null;
 
@@ -221,6 +231,31 @@ export default function Live2DViewer() {
     function releasePointer() {
       pointerTargetX = 0;
       pointerTargetY = 0;
+    }
+
+    function rememberPointerDown(event: PointerEvent) {
+      pointerDownAt = { x: event.clientX, y: event.clientY };
+    }
+
+    function handleCanvasClick(event: MouseEvent) {
+      if (!model || model.destroyed) return;
+      if (pointerDownAt) {
+        const distance = Math.hypot(
+          event.clientX - pointerDownAt.x,
+          event.clientY - pointerDownAt.y,
+        );
+        pointerDownAt = null;
+        if (distance > 8) return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      const x = ((event.clientX - rect.left) / rect.width) * app.screen.width;
+      const y = ((event.clientY - rect.top) / rect.height) * app.screen.height;
+      if (model.hitTest(x, y).length > 0 || model.getBounds().contains(x, y)) {
+        onPetClickRef.current();
+      }
     }
 
     async function activateExpression(index: number) {
@@ -325,7 +360,9 @@ export default function Live2DViewer() {
     }
 
     canvas.addEventListener("pointermove", updatePointer);
+    canvas.addEventListener("pointerdown", rememberPointerDown);
     canvas.addEventListener("pointerleave", releasePointer);
+    canvas.addEventListener("click", handleCanvasClick);
     window.addEventListener("keydown", handleKeyDown);
 
     resizeObserver = new ResizeObserver(() => fitModel());
@@ -440,7 +477,9 @@ export default function Live2DViewer() {
       emotionChannel?.close();
 
       canvas.removeEventListener("pointermove", updatePointer);
+      canvas.removeEventListener("pointerdown", rememberPointerDown);
       canvas.removeEventListener("pointerleave", releasePointer);
+      canvas.removeEventListener("click", handleCanvasClick);
       window.removeEventListener("keydown", handleKeyDown);
 
       if (tickerCallback) {
