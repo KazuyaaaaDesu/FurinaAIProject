@@ -22,6 +22,7 @@ const INITIAL_ROAMING_STATE: RoamingState = {
 
 const MEMORY_COMMAND_KEY = "fufuu-avatar-command";
 const AVATAR_COMMAND_CHANNEL = "fufuu-avatar-command";
+const isElectronAvatar = window.sakuraDesktop !== undefined;
 const forceThreeDimensional =
   new URLSearchParams(window.location.search).get("debugMotions") === "1";
 
@@ -286,37 +287,40 @@ export default function Avatar() {
         <Live2DViewer onPetClick={showToolbar} />
       )}
 
-      <div className="fufuu-desktop-controls">
-        <button
-          className="fufuu-control-button"
-          onClick={toggleRoaming}
-          type="button"
-          aria-label={roaming.enabled ? "Pause roaming" : "Start roaming"}
-          title={roaming.enabled ? "Pause roaming" : "Roam around desktop"}
-        >
-          {roaming.enabled ? "Ⅱ Pause" : "✧ Roam"}
-        </button>
-
-        {displayMode === "3d" && (
+      {!isElectronAvatar && (
+        <div className="fufuu-desktop-controls">
           <button
-            className="fufuu-control-button fufuu-knock-button"
-            onClick={() => window.sakuraDesktop?.knock?.()}
+            className="fufuu-control-button"
+            onClick={toggleRoaming}
             type="button"
-            aria-label="Knock on the screen"
-            title="Move to a screen edge and knock"
+            aria-label={roaming.enabled ? "Pause roaming" : "Start roaming"}
+            title={roaming.enabled ? "Pause roaming" : "Roam around desktop"}
           >
-            ♡ Knock
+            {roaming.enabled ? "Ⅱ Pause" : "✧ Roam"}
           </button>
-        )}
-      </div>
+          {displayMode === "3d" && (
+            <button
+              className="fufuu-control-button fufuu-knock-button"
+              onClick={() => window.sakuraDesktop?.knock?.()}
+              type="button"
+              aria-label="Knock on the screen"
+              title="Move to a screen edge and knock"
+            >
+              ♡ Knock
+            </button>
+          )}
+        </div>
+      )}
 
-      <button
-        className="sakura-chat-button"
-        onClick={openChat}
-        type="button"
-      >
-        <span className="chat-sparkle">✧</span> Chat with me
-      </button>
+      {!isElectronAvatar && (
+        <button
+          className="sakura-chat-button"
+          onClick={openChat}
+          type="button"
+        >
+          <span className="chat-sparkle">✧</span> Chat with me
+        </button>
+      )}
 
       {toolbarOpen && (
         <aside
