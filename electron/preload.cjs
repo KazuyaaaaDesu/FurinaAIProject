@@ -1,9 +1,41 @@
 ﻿
 const { contextBridge, ipcRenderer } = require("electron");
 
+const memoryOpenListeners = new Set();
+let pendingMemoryOpen = false;
+
+ipcRenderer.on("sakura:open-memories", () => {
+  if (memoryOpenListeners.size === 0) {
+    pendingMemoryOpen = true;
+    return;
+  }
+
+  for (const callback of memoryOpenListeners) {
+    callback();
+  }
+});
+
 contextBridge.exposeInMainWorld("sakuraDesktop", {
   openChat() {
-    ipcRenderer.send("sakura:open-chat");
+    return ipcRenderer.invoke("sakura:open-chat");
+  },
+
+  openMemories() {
+    return ipcRenderer.invoke("sakura:open-memories");
+  },
+
+  onOpenMemories(callback) {
+    if (typeof callback !== "function") {
+      throw new TypeError("onOpenMemories requires a callback.");
+    }
+
+    memoryOpenListeners.add(callback);
+    if (pendingMemoryOpen) {
+      pendingMemoryOpen = false;
+      callback();
+    }
+
+    return () => memoryOpenListeners.delete(callback);
   },
 
   setDisplayMode(mode) {

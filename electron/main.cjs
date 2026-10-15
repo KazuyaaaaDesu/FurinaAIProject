@@ -20,6 +20,7 @@ const ALLOWED_ORIGINS = new Set([
 let avatarWindow = null;
 let chatWindow = null;
 let speechBubbleWindow = null;
+const loadedChatWebContents = new WeakSet();
 let speechBubbleEnabled = false;
 let speechBubbleText = "Oh? You're here. What is it?";
 
@@ -375,7 +376,12 @@ function createAvatarWindow() {
     broadcastRoamingState();
   });
 
+  avatarWindow.on("close", () => {
+    console.info("[Fufuu] Avatar window close requested.");
+  });
+
   avatarWindow.on("closed", () => {
+    console.info("[Fufuu] Avatar window closed.");
     avatarWindow = null;
     knockInProgress = false;
     knockReturnPosition = null;
@@ -389,10 +395,10 @@ function openChatWindow() {
     if (chatWindow.isMinimized()) chatWindow.restore();
     chatWindow.show();
     chatWindow.focus();
-    return;
+    return chatWindow;
   }
 
-  chatWindow = new BrowserWindow({
+  const windowRef = new BrowserWindow({
     width: 1100,
     height: 800,
     minWidth: 760,
@@ -406,16 +412,76 @@ function openChatWindow() {
       nodeIntegration: false,
     },
   });
+  chatWindow = windowRef;
 
-  chatWindow.loadURL(APP_URL);
+  windowRef.webContents.once("did-finish-load", () => {
+    loadedChatWebContents.add(windowRef.webContents);
+  });
 
-  chatWindow.once("ready-to-show", () => {
-    chatWindow?.show();
+  void windowRef.loadURL(APP_URL).catch((error) => {
+    console.error("[Fufuu] Chat window failed to load:", error);
+  });
+
+  windowRef.once("ready-to-show", () => {
+    if (windowRef.isDestroyed()) return;
+    windowRef.show();
     broadcastRoamingState();
   });
 
-  chatWindow.on("closed", () => {
-    chatWindow = null;
+  windowRef.on("close", () => {
+    console.info("[Fufuu] Chat window close requested.");
+  });
+
+  windowRef.on("closed", () => {
+    console.info("[Fufuu] Chat window closed.");
+    if (chatWindow === windowRef) {
+      chatWindow = null;
+    }
+  });
+
+  windowRef.webContents.on(
+    "render-process-gone",
+    (_event, details) => {
+      console.error("[Fufuu] Chat renderer process exited:", details);
+    },
+  );
+
+  return windowRef;
+}
+
+function waitForWindowLoad(windowRef) {
+  const contents = windowRef.webContents;
+  if (windowRef.isDestroyed() || loadedChatWebContents.has(contents)) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      contents.removeListener("did-finish-load", handleFinished);
+      contents.removeListener("did-fail-load", handleFailed);
+    };
+    const handleFinished = () => {
+      cleanup();
+      resolve();
+    };
+    const handleFailed = (
+      _event,
+      errorCode,
+      errorDescription,
+      _validatedURL,
+      isMainFrame,
+    ) => {
+      if (!isMainFrame) return;
+      cleanup();
+      reject(
+        new Error(
+          `Chat window load failed (${errorCode}): ${errorDescription}`,
+        ),
+      );
+    };
+
+    contents.once("did-finish-load", handleFinished);
+    contents.on("did-fail-load", handleFailed);
   });
 }
 
@@ -625,8 +691,36 @@ function startSpeechBridge() {
   );
 }
 
-ipcMain.on("sakura:open-chat", () => {
-  openChatWindow();
+ipcMain.handle("sakura:open-chat", () => {
+  const targetWindow = openChatWindow();
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    throw new Error("The Fufuu chat window could not be opened.");
+  }
+
+  return waitForWindowLoad(targetWindow).then(() => {
+    if (targetWindow.isDestroyed()) {
+      throw new Error("The Fufuu chat window closed before it finished opening.");
+    }
+    targetWindow.show();
+    targetWindow.focus();
+    return true;
+  });
+});
+
+ipcMain.handle("sakura:open-memories", async () => {
+  const targetWindow = openChatWindow();
+  if (!targetWindow || targetWindow.isDestroyed()) {
+    throw new Error("The Fufuu chat window could not be opened.");
+  }
+
+  await waitForWindowLoad(targetWindow);
+  if (targetWindow.isDestroyed()) {
+    throw new Error("The Fufuu chat window closed before Memories could open.");
+  }
+
+  targetWindow.webContents.send("sakura:open-memories");
+  targetWindow.focus();
+  return true;
 });
 
 ipcMain.on("fufuu:set-display-mode", (_event, mode) => {
@@ -742,6 +836,7 @@ app.on("before-quit", () => {
 });
 
 app.on("window-all-closed", () => {
+  console.info("[Fufuu] All application windows closed.");
   if (!quitting && process.platform !== "darwin") {
     app.quit();
   }

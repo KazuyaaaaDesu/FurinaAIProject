@@ -474,6 +474,13 @@ body.avatar-mode #root {
   height: 100% !important;
   pointer-events: auto;
   touch-action: none;
+  -webkit-app-region: no-drag;
+}
+
+.fufuu-live2d-viewer canvas {
+  pointer-events: auto;
+  touch-action: none;
+  -webkit-app-region: no-drag;
 }
 
 .fufuu-vrm-status {
@@ -569,6 +576,12 @@ body.avatar-mode #root {
   color: #71375f;
   font: 12px "Segoe UI", sans-serif;
   box-shadow: 0 10px 32px #50244555, inset 0 1px #fff;
+  -webkit-app-region: no-drag;
+}
+
+.fufuu-pet-toolbar *,
+.fufuu-live2d-viewer,
+.fufuu-vrm-viewer {
   -webkit-app-region: no-drag;
 }
 

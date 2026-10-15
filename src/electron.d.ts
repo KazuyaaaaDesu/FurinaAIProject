@@ -16,7 +16,9 @@ type FufuuSpeechBubbleState = {
 declare global {
   interface Window {
     sakuraDesktop?: {
-      openChat: () => void;
+      openChat: () => Promise<boolean>;
+      openMemories: () => Promise<boolean>;
+      onOpenMemories: (callback: () => void) => () => void;
 
       setDisplayMode: (mode: FufuuDisplayMode) => void;
       onDisplayMode: (

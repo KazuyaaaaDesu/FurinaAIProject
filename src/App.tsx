@@ -566,6 +566,10 @@ function ChatApp() {
 
     channel?.addEventListener("message", handleBroadcast);
     window.addEventListener("storage", handleStorage);
+    const unsubscribeMemoryRequest =
+      window.sakuraDesktop?.onOpenMemories?.(() => {
+        setMemoryPanelOpen(true);
+      });
 
     try {
       const stored = window.localStorage.getItem(AVATAR_COMMAND_KEY);
@@ -578,6 +582,7 @@ function ChatApp() {
       channel?.removeEventListener("message", handleBroadcast);
       channel?.close();
       window.removeEventListener("storage", handleStorage);
+      unsubscribeMemoryRequest?.();
     };
   }, []);
 

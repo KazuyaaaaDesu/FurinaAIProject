@@ -39,6 +39,7 @@ export default function Avatar() {
   const [motionLoadError, setMotionLoadError] = useState("");
   const [pendingMotionId, setPendingMotionId] = useState<string | null>(null);
   const [speechBubbleEnabled, setSpeechBubbleEnabled] = useState(false);
+  const [toolbarActionError, setToolbarActionError] = useState("");
   const toolbarRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -193,8 +194,17 @@ export default function Avatar() {
     };
   }, [toolbarOpen]);
 
-  function openChat() {
-    window.sakuraDesktop?.openChat?.();
+  async function openChat() {
+    try {
+      await window.sakuraDesktop?.openChat?.();
+      setToolbarActionError("");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : String(error);
+      console.error("[Fufuu] Could not open the chat window:", error);
+      setToolbarActionError(`Couldn't open Chat: ${message}`);
+      return;
+    }
     setToolbarOpen(false);
     setToolbarPanel(null);
   }
@@ -209,13 +219,26 @@ export default function Avatar() {
     }
   }
 
-  function openMemories() {
-    const command = { id: crypto.randomUUID(), action: "memories" as const };
-    window.localStorage.setItem(MEMORY_COMMAND_KEY, JSON.stringify(command));
-    const channel = new BroadcastChannel(AVATAR_COMMAND_CHANNEL);
-    channel.postMessage(command);
-    channel.close();
-    window.sakuraDesktop?.openChat?.();
+  async function openMemories() {
+    if (window.sakuraDesktop?.openMemories) {
+      try {
+        await window.sakuraDesktop.openMemories();
+        setToolbarActionError("");
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : String(error);
+        console.error("[Fufuu] Could not open the Memories panel:", error);
+        setToolbarActionError(`Couldn't open Memories: ${message}`);
+        return;
+      }
+    } else {
+      const command = { id: crypto.randomUUID(), action: "memories" as const };
+      window.localStorage.setItem(MEMORY_COMMAND_KEY, JSON.stringify(command));
+      const channel = new BroadcastChannel(AVATAR_COMMAND_CHANNEL);
+      channel.postMessage(command);
+      channel.close();
+      await openChat();
+    }
     setToolbarOpen(false);
     setToolbarPanel(null);
   }
@@ -353,6 +376,11 @@ export default function Avatar() {
               Settings
             </button>
           </nav>
+          {toolbarActionError && (
+            <p className="fufuu-pet-toolbar-error" role="alert">
+              {toolbarActionError}
+            </p>
+          )}
 
           {toolbarPanel === "interact" && (
             <section className="fufuu-pet-toolbar-panel" aria-label="Interactions">

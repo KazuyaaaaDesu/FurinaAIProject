@@ -165,6 +165,7 @@ export default function VRMViewer({
     const currentExpressions: Record<string, number> = {};
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
+    let canvasPointerDown: { x: number; y: number } | null = null;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
@@ -208,8 +209,21 @@ export default function VRMViewer({
     fillLight.position.set(-2, 1, -1);
     scene.add(fillLight);
 
+    const handleCanvasPointerDown = (event: PointerEvent) => {
+      canvasPointerDown = { x: event.clientX, y: event.clientY };
+    };
+
     const handleCanvasClick = (event: MouseEvent) => {
       if (!vrm) return;
+      if (canvasPointerDown) {
+        const distance = Math.hypot(
+          event.clientX - canvasPointerDown.x,
+          event.clientY - canvasPointerDown.y,
+        );
+        canvasPointerDown = null;
+        if (distance > 8) return;
+      }
+
       const rect = renderer.domElement.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
 
@@ -223,6 +237,7 @@ export default function VRMViewer({
       }
     };
 
+    renderer.domElement.addEventListener("pointerdown", handleCanvasPointerDown);
     renderer.domElement.addEventListener("click", handleCanvasClick);
 
     const updateCameraFraming = () => {
@@ -1396,6 +1411,10 @@ export default function VRMViewer({
       window.removeEventListener("fufuu:play-motion", handlePlayMotionEvent);
       unsubscribeKnock?.();
       renderer.domElement.removeEventListener("click", handleCanvasClick);
+      renderer.domElement.removeEventListener(
+        "pointerdown",
+        handleCanvasPointerDown,
+      );
       window.cancelAnimationFrame(frameId);
       resizeObserver.disconnect();
 
