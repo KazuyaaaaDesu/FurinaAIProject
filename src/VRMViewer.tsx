@@ -17,6 +17,11 @@ import {
   type MotionDefinition,
 } from "./petBehavior";
 import {
+  chooseGesture,
+  nextPersonalityWait,
+  type PersonalityMode,
+} from "./fufuuPersonality";
+import {
   DEFAULT_DESKTOP_STAGE_SETTINGS,
   type CharacterScreenGeometry,
   type DesktopStageSettings,
@@ -96,6 +101,7 @@ function getTrackLayout(clip: THREE.AnimationClip) {
 export default function VRMViewer({
   roamingEnabled,
   autonomousBehaviorEnabled,
+  personalityMode,
   onPetClick,
   onPointerInteractive,
   onCharacterGeometryChange,
@@ -103,6 +109,7 @@ export default function VRMViewer({
 }: {
   roamingEnabled: boolean;
   autonomousBehaviorEnabled: boolean;
+  personalityMode: PersonalityMode;
   onPetClick: (geometry: CharacterScreenGeometry) => void;
   onPointerInteractive: (interactive: boolean) => void;
   onCharacterGeometryChange: (
@@ -135,6 +142,7 @@ export default function VRMViewer({
   const returnTransitionDurationRef = useRef(0.5);
   const roamingEnabledRef = useRef(roamingEnabled);
   const autonomousBehaviorEnabledRef = useRef(autonomousBehaviorEnabled);
+  const personalityModeRef = useRef<PersonalityMode>(personalityMode);
   const roamDiagnosticsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     onPetClickRef.current = onPetClick;
@@ -158,6 +166,10 @@ export default function VRMViewer({
       `Furina roaming preference ${roamingEnabled ? "enabled" : "paused"}.`,
     );
   }, [roamingEnabled]);
+
+  useEffect(() => {
+    personalityModeRef.current = personalityMode;
+  }, [personalityMode]);
 
   useEffect(() => {
     autonomousBehaviorEnabledRef.current = autonomousBehaviorEnabled;
@@ -203,6 +215,7 @@ export default function VRMViewer({
     const roamTargetRotation = new THREE.Quaternion();
     let autonomousWaitRemaining = 0;
     let autonomousScheduled = false;
+    const recentAutonomousGestures: string[] = [];
     const AUTONOMOUS_GESTURE_IDS = ["wave", "presenting", "openarms"];
     let appliedCharacterSettingsValue: typeof characterSettings | null = null;
     let originalRootX = 0;
@@ -1500,7 +1513,7 @@ export default function VRMViewer({
     };
 
     const scheduleAutonomousGesture = () => {
-      autonomousWaitRemaining = 20 + Math.random() * 25;
+      autonomousWaitRemaining = nextPersonalityWait(personalityModeRef.current);
       autonomousScheduled = true;
       autonomousLog(
         "schedule",
@@ -1539,7 +1552,8 @@ export default function VRMViewer({
         `Eligible loaded motions: ${eligible.join(", ")}.`,
       );
 
-      const id = eligible[Math.floor(Math.random() * eligible.length)];
+      const id = chooseGesture(eligible, recentAutonomousGestures, personalityModeRef.current);
+      if (!id) return;
       const motion = motionsById.get(id);
       if (!motion) return;
 
@@ -1557,7 +1571,9 @@ export default function VRMViewer({
         autonomousLog("blocked", `Motion "${motion.definition.label}" failed to start.`);
         scheduleAutonomousGesture();
       } else {
-        autonomousLog("start", `Playing autonomous gesture "${motion.definition.label}".`);
+        recentAutonomousGestures.push(id);
+        while (recentAutonomousGestures.length > 4) recentAutonomousGestures.shift();
+        autonomousLog("start", `Playing autonomous gesture "${motion.definition.label}" (${personalityModeRef.current}).`);
       }
     };
 

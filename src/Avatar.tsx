@@ -20,6 +20,7 @@ import {
 import "./Avatar.css";
 import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
+import type { PersonalityMode } from "./fufuuPersonality";
 
 type DisplayMode = "2d" | "3d";
 type ToolbarPanel = "interact" | "memories" | "motions" | "settings";
@@ -53,6 +54,10 @@ export default function Avatar({ toolbarOnly = false }: { toolbarOnly?: boolean 
       const saved = window.localStorage.getItem("fufuu-autonomous-behavior");
       return saved === "true";
     });
+  const [personalityMode, setPersonalityMode] = useState<PersonalityMode>(() => {
+    const saved = window.localStorage.getItem("fufuu-personality-mode");
+    return saved === "chill" || saved === "hyper" ? saved : "balanced";
+  });
   const [toolbarOpen, setToolbarOpen] = useState(false);
   const [characterGeometry, setCharacterGeometry] =
     useState<CharacterScreenGeometry | null>(null);
@@ -656,6 +661,7 @@ export default function Avatar({ toolbarOnly = false }: { toolbarOnly?: boolean 
         <VRMViewer
           roamingEnabled={roaming.enabled}
           autonomousBehaviorEnabled={autonomousBehaviorEnabled}
+          personalityMode={personalityMode}
           onPetClick={showToolbar}
           onPointerInteractive={reportPointerInteractivity}
           onCharacterGeometryChange={updateCharacterGeometry}
@@ -870,6 +876,21 @@ export default function Avatar({ toolbarOnly = false }: { toolbarOnly?: boolean 
                   onChange={toggleAutonomousBehavior}
                 />
                 <span>Autonomous gestures (3D only)</span>
+              </label>
+              <label className="fufuu-stage-setting">
+                <span>Fufuu's personality</span>
+                <select
+                  value={personalityMode}
+                  onChange={(event) => {
+                    const next = event.currentTarget.value as PersonalityMode;
+                    setPersonalityMode(next);
+                    window.localStorage.setItem("fufuu-personality-mode", next);
+                  }}
+                >
+                  <option value="chill">Chill · quiet and relaxed</option>
+                  <option value="balanced">Balanced · natural variety</option>
+                  <option value="hyper">Hyper · playful and lively</option>
+                </select>
               </label>
               {displayMode === "2d" &&
                 stageState.settings.coverage === "all" && (
