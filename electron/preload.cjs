@@ -50,6 +50,10 @@ contextBridge.exposeInMainWorld("sakuraDesktop", {
     ipcRenderer.send("fufuu:roam:knock");
   },
 
+  completeKnock() {
+    ipcRenderer.send("fufuu:roam:knock-finished");
+  },
+
   onKnock(callback) {
     const listener = () => callback();
 

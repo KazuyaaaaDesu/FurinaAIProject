@@ -30,6 +30,7 @@ declare global {
       ) => () => void;
 
       knock: () => void;
+      completeKnock: () => void;
       onKnock: (callback: () => void) => () => void;
 
       setSpeechBubbleEnabled: (enabled: boolean) => void;

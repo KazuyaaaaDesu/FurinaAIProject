@@ -78,8 +78,9 @@
   },
   {
     "id": "walking",
-    "label": "Walking (walkin file)",
-    "source": "/motions/furina-walkin.vrma"
+    "label": "Walking",
+    "source": "/motions/furina-walk-animation.vrma",
+    "loop": true
   },
   {
     "id": "wave",

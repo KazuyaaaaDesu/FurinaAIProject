@@ -1,5 +1,5 @@
 ﻿
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import "./Avatar.css";
 import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
@@ -26,7 +26,6 @@ export default function Avatar() {
       ? "3d"
       : "2d"
   );
-  const displayModeRef = useRef(displayMode);
   const [roaming, setRoaming] = useState<RoamingState>(INITIAL_ROAMING_STATE);
 
   useEffect(() => {
@@ -34,12 +33,7 @@ export default function Avatar() {
 
     const syncMode = (mode: DisplayMode) => {
       const nextMode = forceThreeDimensional ? "3d" : mode;
-      displayModeRef.current = nextMode;
       setDisplayMode(nextMode);
-
-      if (nextMode !== "3d") {
-        setRoaming(INITIAL_ROAMING_STATE);
-      }
 
       if (!forceThreeDimensional) {
         window.localStorage.setItem("fufuu-display-mode", nextMode);
@@ -53,11 +47,7 @@ export default function Avatar() {
     );
 
     void window.sakuraDesktop?.getRoamingState()
-      .then((state) =>
-        setRoaming(
-          displayModeRef.current === "3d" ? state : INITIAL_ROAMING_STATE
-        )
-      )
+      .then(setRoaming)
       .catch(() => undefined);
 
     const handleStorage = (event: StorageEvent) => {
@@ -89,6 +79,10 @@ export default function Avatar() {
     };
   }, []);
 
+  useEffect(() => {
+    window.sakuraDesktop?.setDisplayMode(displayMode);
+  }, [displayMode]);
+
   function openChat() {
     window.sakuraDesktop?.openChat();
   }
@@ -103,20 +97,24 @@ export default function Avatar() {
 
   return (
     <main className={`sakura-stage mode-${displayMode}`}>
-      {displayMode === "3d" ? <VRMViewer /> : <Live2DViewer />}
+      {displayMode === "3d" ? (
+        <VRMViewer roamingEnabled={roaming.enabled} />
+      ) : (
+        <Live2DViewer />
+      )}
 
-      {displayMode === "3d" && (
-        <div className="fufuu-desktop-controls">
-          <button
-            className="fufuu-control-button"
-            onClick={toggleRoaming}
-            type="button"
-            aria-label={roaming.enabled ? "Pause roaming" : "Start roaming"}
-            title={roaming.enabled ? "Pause roaming" : "Roam around desktop"}
-          >
-            {roaming.enabled ? "Ⅱ Pause" : "✧ Roam"}
-          </button>
+      <div className="fufuu-desktop-controls">
+        <button
+          className="fufuu-control-button"
+          onClick={toggleRoaming}
+          type="button"
+          aria-label={roaming.enabled ? "Pause roaming" : "Start roaming"}
+          title={roaming.enabled ? "Pause roaming" : "Roam around desktop"}
+        >
+          {roaming.enabled ? "Ⅱ Pause" : "✧ Roam"}
+        </button>
 
+        {displayMode === "3d" && (
           <button
             className="fufuu-control-button fufuu-knock-button"
             onClick={knock}
@@ -126,8 +124,8 @@ export default function Avatar() {
           >
             ♡ Knock
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       <button
         className="sakura-chat-button"

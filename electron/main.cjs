@@ -31,13 +31,15 @@ let currentDisplayMode = "2d";
 
 let roamingEnabled = false;
 let roamingTimer = null;
-let roamingTarget = null;
+let movementTimer = null;
+let knockInProgress = false;
+let knockReturnPosition = null;
+let knockReturning = false;
 let movementInProgress = false;
-let lastRoamPosition = null;
 
 const AVATAR_WIDTH = 360;
 const AVATAR_HEIGHT = 520;
-const ROAM_INTERVAL_MS = 7000;
+const ROAM_INTERVAL_MS = 3500;
 const ROAM_MARGIN = 12;
 
 async function isAvailable(url) {
@@ -124,14 +126,24 @@ function broadcastRoamingState() {
   }
 }
 
-function stopRoamingTimer() {
+function clearRoamingTimer() {
   if (roamingTimer) {
     clearTimeout(roamingTimer);
     roamingTimer = null;
   }
+}
 
-  roamingTarget = null;
+function stopWindowMovement() {
+  if (movementTimer) {
+    clearInterval(movementTimer);
+    movementTimer = null;
+  }
   movementInProgress = false;
+}
+
+function stopRoamingTimer() {
+  clearRoamingTimer();
+  stopWindowMovement();
 }
 
 function getAvatarDisplay() {
@@ -162,7 +174,15 @@ function clampAvatarPosition(x, y, display = getAvatarDisplay()) {
 }
 
 function scheduleNextRoam(delay = ROAM_INTERVAL_MS) {
-  if (!roamingEnabled || currentDisplayMode !== "3d" || quitting) return;
+  if (
+    !roamingEnabled ||
+    currentDisplayMode !== "2d" ||
+    knockInProgress ||
+    knockReturning ||
+    quitting
+  ) {
+    return;
+  }
 
   if (roamingTimer) clearTimeout(roamingTimer);
 
@@ -175,11 +195,16 @@ function scheduleNextRoam(delay = ROAM_INTERVAL_MS) {
 function roamToNewPosition() {
   if (
     !roamingEnabled ||
-    currentDisplayMode !== "3d" ||
+    knockInProgress ||
     !avatarWindow ||
     avatarWindow.isDestroyed() ||
     movementInProgress
   ) {
+    return;
+  }
+
+  if (currentDisplayMode === "3d") {
+    scheduleNextRoam(ROAM_INTERVAL_MS + Math.random() * 2500);
     return;
   }
 
@@ -210,31 +235,65 @@ function roamToNewPosition() {
   const pool = farCandidates.length ? farCandidates : candidates;
   const target = pool[Math.floor(Math.random() * pool.length)];
 
-  lastRoamPosition = current;
-  roamingTarget = target;
   movementInProgress = true;
   broadcastRoamingState();
 
-  // Electron moves the transparent avatar window smoothly between positions.
-  avatarWindow.setPosition(target.x, target.y, true);
+  animateAvatarWindowTo(target, () => {
+    if (!quitting) scheduleNextRoam(ROAM_INTERVAL_MS + Math.random() * 2500);
+  });
+}
 
-  // Stop the movement state after the transition, then wait before roaming again.
-  setTimeout(() => {
-    if (quitting) return;
+function animateAvatarWindowTo(target, onComplete) {
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    stopWindowMovement();
+    return;
+  }
+
+  if (movementTimer) clearInterval(movementTimer);
+
+  const start = avatarWindow.getBounds();
+  const destination = clampAvatarPosition(target.x, target.y);
+  const distance = Math.hypot(destination.x - start.x, destination.y - start.y);
+  const duration = Math.max(900, Math.min(4500, (distance / 180) * 1000));
+  const startedAt = Date.now();
+
+  movementInProgress = true;
+  broadcastRoamingState();
+
+  movementTimer = setInterval(() => {
+    if (!avatarWindow || avatarWindow.isDestroyed() || quitting) {
+      stopWindowMovement();
+      return;
+    }
+
+    const progress = Math.min((Date.now() - startedAt) / duration, 1);
+    const eased = progress * progress * (3 - 2 * progress);
+    const x = Math.round(start.x + (destination.x - start.x) * eased);
+    const y = Math.round(start.y + (destination.y - start.y) * eased);
+
+    avatarWindow.setPosition(x, y);
+
+    if (progress < 1) return;
+
+    clearInterval(movementTimer);
+    movementTimer = null;
     movementInProgress = false;
-    roamingTarget = null;
     broadcastRoamingState();
-    scheduleNextRoam();
-  }, 1100);
+    onComplete?.();
+  }, 16);
 }
 
 function setRoamingEnabled(enabled) {
-  roamingEnabled = enabled && currentDisplayMode === "3d";
+  roamingEnabled = enabled;
 
-  stopRoamingTimer();
+  if (knockInProgress || knockReturning) {
+    clearRoamingTimer();
+  } else {
+    stopRoamingTimer();
+  }
   broadcastRoamingState();
 
-  if (roamingEnabled) {
+  if (roamingEnabled && !knockInProgress && !knockReturning) {
     scheduleNextRoam(900);
   }
 }
@@ -267,13 +326,11 @@ function moveAvatarToNearestEdge() {
 
   const target = clampAvatarPosition(x, y, display);
 
-  avatarWindow.setPosition(target.x, target.y, true);
-
-  setTimeout(() => {
+  animateAvatarWindowTo(target, () => {
     if (avatarWindow && !avatarWindow.isDestroyed()) {
       avatarWindow.webContents.send("fufuu:avatar:knock");
     }
-  }, 450);
+  });
 }
 
 function createAvatarWindow() {
@@ -320,6 +377,9 @@ function createAvatarWindow() {
 
   avatarWindow.on("closed", () => {
     avatarWindow = null;
+    knockInProgress = false;
+    knockReturnPosition = null;
+    knockReturning = false;
     setRoamingEnabled(false);
   });
 }
@@ -572,10 +632,13 @@ ipcMain.on("sakura:open-chat", () => {
 ipcMain.on("fufuu:set-display-mode", (_event, mode) => {
   if (mode !== "2d" && mode !== "3d") return;
 
+  const previousMode = currentDisplayMode;
   currentDisplayMode = mode;
 
-  if (currentDisplayMode !== "3d") {
-    setRoamingEnabled(false);
+  if (previousMode !== currentDisplayMode && !knockInProgress) {
+    if (knockReturning) clearRoamingTimer();
+    else stopRoamingTimer();
+    if (roamingEnabled) scheduleNextRoam(900);
   }
 
   for (const win of [avatarWindow, chatWindow]) {
@@ -596,18 +659,43 @@ ipcMain.handle("fufuu:roam:get-state", () => ({
 }));
 
 ipcMain.on("fufuu:roam:knock", () => {
-  if (currentDisplayMode !== "3d") return;
+  if (
+    knockInProgress ||
+    knockReturning ||
+    !avatarWindow ||
+    avatarWindow.isDestroyed()
+  ) {
+    return;
+  }
 
-  const wasRoaming = roamingEnabled;
-  setRoamingEnabled(false);
+  knockInProgress = true;
+  clearRoamingTimer();
+  stopWindowMovement();
+  const bounds = avatarWindow.getBounds();
+  knockReturnPosition = { x: bounds.x, y: bounds.y };
+  broadcastRoamingState();
   moveAvatarToNearestEdge();
+});
 
-  // Resume roaming after the gesture only if it was previously enabled.
-  setTimeout(() => {
-    if (wasRoaming && currentDisplayMode === "3d") {
-      setRoamingEnabled(true);
-    }
-  }, 2200);
+ipcMain.on("fufuu:roam:knock-finished", () => {
+  if (!knockInProgress) return;
+
+  knockInProgress = false;
+  broadcastRoamingState();
+  const returnPosition = knockReturnPosition;
+  knockReturnPosition = null;
+
+  if (roamingEnabled && currentDisplayMode === "2d") {
+    scheduleNextRoam(900);
+  } else if (returnPosition) {
+    knockReturning = true;
+    animateAvatarWindowTo(returnPosition, () => {
+      knockReturning = false;
+      if (roamingEnabled && currentDisplayMode === "2d") {
+        scheduleNextRoam(900);
+      }
+    });
+  }
 });
 
 ipcMain.on("fufuu:speech-bubble:set-enabled", (_event, enabled) => {
