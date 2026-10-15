@@ -4,8 +4,6 @@
    Supports mutually exclusive 2D blob and 3D VRM modes.
    ========================================================= */
 
-/* ---------- Transparent Electron window ---------- */
-
 html,
 body,
 body.avatar-mode,
@@ -25,8 +23,6 @@ body.avatar-mode #root {
   position: relative;
 }
 
-/* ---------- Main avatar stage ---------- */
-
 .sakura-stage {
   --pink-light: #ffd5ef;
   --pink: #f48bc9;
@@ -41,14 +37,12 @@ body.avatar-mode #root {
   align-items: center;
   justify-content: center;
   gap: 8px;
-
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   padding: 12px;
   overflow: hidden;
-
   color: #fff4fb;
   font-family: "Segoe UI", sans-serif;
   user-select: none;
@@ -451,7 +445,6 @@ body.avatar-mode #root {
 
 /* ---------- 3D VRM viewer ---------- */
 
-/* The viewer is a direct child of .sakura-stage in 3D mode. */
 .sakura-stage.mode-3d {
   display: block;
   padding: 0;
@@ -499,6 +492,63 @@ body.avatar-mode #root {
   color: #ffd5d5;
 }
 
+/* ---------- Desktop roaming controls ---------- */
+
+.fufuu-desktop-controls {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: calc(100% - 16px);
+  transform: translateX(-50%);
+  -webkit-app-region: no-drag;
+}
+
+.fufuu-control-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 29px;
+  padding: 6px 10px;
+  border: 1px solid #ffffffbd;
+  border-radius: 999px;
+  background: #fff2faed;
+  color: #923c7c;
+  font: 700 10px "Segoe UI", sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 3px 12px #8b3a8040;
+  -webkit-app-region: no-drag;
+  transition:
+    background 150ms ease,
+    transform 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.fufuu-control-button:hover {
+  background: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 15px #8b3a8050;
+}
+
+.fufuu-control-button:active {
+  transform: scale(0.96);
+}
+
+.fufuu-control-button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.fufuu-knock-button {
+  color: #7e467d;
+}
+
 /* ---------- Chat button ---------- */
 
 .sakura-chat-button {
@@ -536,7 +586,6 @@ body.avatar-mode #root {
   background: #ffe0f3;
 }
 
-/* In 3D mode, keep the button above the model. */
 .sakura-stage.mode-3d > .sakura-chat-button {
   display: flex !important;
   position: absolute;
@@ -559,81 +608,40 @@ body.avatar-mode #root {
 /* ---------- Animations ---------- */
 
 @keyframes sakura-float {
-  0%, 100% {
-    transform: translateY(0) rotate(-2deg);
-  }
-
-  50% {
-    transform: translateY(-6px) rotate(2deg);
-  }
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-6px) rotate(2deg); }
 }
 
 @keyframes sakura-happy {
-  0%, 100% {
-    transform: translateY(0) rotate(-3deg) scale(1);
-  }
-
-  50% {
-    transform: translateY(-8px) rotate(3deg) scale(1.025);
-  }
+  0%, 100% { transform: translateY(0) rotate(-3deg) scale(1); }
+  50% { transform: translateY(-8px) rotate(3deg) scale(1.025); }
 }
 
 @keyframes sakura-curious {
-  0%, 100% {
-    transform: translateY(0) rotate(-5deg);
-  }
-
-  50% {
-    transform: translateY(-3px) rotate(5deg);
-  }
+  0%, 100% { transform: translateY(0) rotate(-5deg); }
+  50% { transform: translateY(-3px) rotate(5deg); }
 }
 
 @keyframes sakura-sleepy {
-  0%, 100% {
-    transform: translateY(2px) rotate(-1deg) scale(0.99);
-  }
-
-  50% {
-    transform: translateY(5px) rotate(1deg) scale(0.97);
-  }
+  0%, 100% { transform: translateY(2px) rotate(-1deg) scale(0.99); }
+  50% { transform: translateY(5px) rotate(1deg) scale(0.97); }
 }
 
 @keyframes sakura-excited {
-  0%, 100% {
-    transform: translateY(0) rotate(-4deg) scale(1);
-  }
-
-  25% {
-    transform: translateY(-6px) rotate(3deg) scale(1.04);
-  }
-
-  50% {
-    transform: translateY(-2px) rotate(-2deg) scale(1.01);
-  }
-
-  75% {
-    transform: translateY(-8px) rotate(4deg) scale(1.04);
-  }
+  0%, 100% { transform: translateY(0) rotate(-4deg) scale(1); }
+  25% { transform: translateY(-6px) rotate(3deg) scale(1.04); }
+  50% { transform: translateY(-2px) rotate(-2deg) scale(1.01); }
+  75% { transform: translateY(-8px) rotate(4deg) scale(1.04); }
 }
 
 @keyframes sakura-blink {
-  0%, 43%, 47%, 100% {
-    transform: scaleY(1);
-  }
-
-  45% {
-    transform: scaleY(0.1);
-  }
+  0%, 43%, 47%, 100% { transform: scaleY(1); }
+  45% { transform: scaleY(0.1); }
 }
 
 @keyframes flower-wiggle {
-  0%, 100% {
-    transform: rotate(-8deg);
-  }
-
-  50% {
-    transform: rotate(12deg);
-  }
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(12deg); }
 }
 
 @keyframes sparkle {
@@ -641,7 +649,6 @@ body.avatar-mode #root {
     opacity: 0;
     transform: scale(0.5) rotate(0deg);
   }
-
   50% {
     opacity: 1;
     transform: scale(1.2) rotate(25deg);
@@ -649,16 +656,9 @@ body.avatar-mode #root {
 }
 
 @keyframes aura-breathe {
-  0%, 100% {
-    transform: translateX(-50%) scale(0.85);
-  }
-
-  50% {
-    transform: translateX(-50%) scale(1.15);
-  }
+  0%, 100% { transform: translateX(-50%) scale(0.85); }
+  50% { transform: translateX(-50%) scale(1.15); }
 }
-
-/* ---------- Accessibility ---------- */
 
 @media (prefers-reduced-motion: reduce) {
   .sakura-orb,
@@ -671,6 +671,7 @@ body.avatar-mode #root {
     animation: none !important;
   }
 }
+
 /* ---------- Live2D Furina viewer ---------- */
 
 .sakura-stage.mode-2d {

@@ -1,26 +1,64 @@
-﻿import { useEffect, useState } from "react";
+﻿
+import { useEffect, useRef, useState } from "react";
 import "./Avatar.css";
 import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
 
 type DisplayMode = "2d" | "3d";
 
+type RoamingState = {
+  enabled: boolean;
+  moving: boolean;
+};
+
+const INITIAL_ROAMING_STATE: RoamingState = {
+  enabled: false,
+  moving: false,
+};
+
+const forceThreeDimensional =
+  new URLSearchParams(window.location.search).get("debugMotions") === "1";
+
 export default function Avatar() {
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() =>
+    forceThreeDimensional ||
     window.localStorage.getItem("fufuu-display-mode") === "3d"
       ? "3d"
       : "2d"
   );
+  const displayModeRef = useRef(displayMode);
+  const [roaming, setRoaming] = useState<RoamingState>(INITIAL_ROAMING_STATE);
 
   useEffect(() => {
     document.body.classList.add("avatar-mode");
 
     const syncMode = (mode: DisplayMode) => {
-      setDisplayMode(mode);
-      window.localStorage.setItem("fufuu-display-mode", mode);
+      const nextMode = forceThreeDimensional ? "3d" : mode;
+      displayModeRef.current = nextMode;
+      setDisplayMode(nextMode);
+
+      if (nextMode !== "3d") {
+        setRoaming(INITIAL_ROAMING_STATE);
+      }
+
+      if (!forceThreeDimensional) {
+        window.localStorage.setItem("fufuu-display-mode", nextMode);
+      }
     };
 
-    const unsubscribe = window.sakuraDesktop?.onDisplayMode(syncMode);
+    const unsubscribeMode = window.sakuraDesktop?.onDisplayMode(syncMode);
+
+    const unsubscribeRoaming = window.sakuraDesktop?.onRoamingState(
+      setRoaming
+    );
+
+    void window.sakuraDesktop?.getRoamingState()
+      .then((state) =>
+        setRoaming(
+          displayModeRef.current === "3d" ? state : INITIAL_ROAMING_STATE
+        )
+      )
+      .catch(() => undefined);
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== "fufuu-display-mode") return;
@@ -34,7 +72,7 @@ export default function Avatar() {
 
     const handleBroadcast = (event: MessageEvent) => {
       if (event.data === "2d" || event.data === "3d") {
-        setDisplayMode(event.data);
+        syncMode(event.data);
       }
     };
 
@@ -46,7 +84,8 @@ export default function Avatar() {
       window.removeEventListener("storage", handleStorage);
       channel.removeEventListener("message", handleBroadcast);
       channel.close();
-      unsubscribe?.();
+      unsubscribeMode?.();
+      unsubscribeRoaming?.();
     };
   }, []);
 
@@ -54,9 +93,41 @@ export default function Avatar() {
     window.sakuraDesktop?.openChat();
   }
 
+  function toggleRoaming() {
+    window.sakuraDesktop?.setRoamingEnabled(!roaming.enabled);
+  }
+
+  function knock() {
+    window.sakuraDesktop?.knock();
+  }
+
   return (
     <main className={`sakura-stage mode-${displayMode}`}>
       {displayMode === "3d" ? <VRMViewer /> : <Live2DViewer />}
+
+      {displayMode === "3d" && (
+        <div className="fufuu-desktop-controls">
+          <button
+            className="fufuu-control-button"
+            onClick={toggleRoaming}
+            type="button"
+            aria-label={roaming.enabled ? "Pause roaming" : "Start roaming"}
+            title={roaming.enabled ? "Pause roaming" : "Roam around desktop"}
+          >
+            {roaming.enabled ? "Ⅱ Pause" : "✧ Roam"}
+          </button>
+
+          <button
+            className="fufuu-control-button fufuu-knock-button"
+            onClick={knock}
+            type="button"
+            aria-label="Knock on the screen"
+            title="Move to a screen edge and knock"
+          >
+            ♡ Knock
+          </button>
+        </div>
+      )}
 
       <button
         className="sakura-chat-button"

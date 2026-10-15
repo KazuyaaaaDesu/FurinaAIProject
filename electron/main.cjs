@@ -29,6 +29,17 @@ let speechBridgeServer = null;
 let quitting = false;
 let currentDisplayMode = "2d";
 
+let roamingEnabled = false;
+let roamingTimer = null;
+let roamingTarget = null;
+let movementInProgress = false;
+let lastRoamPosition = null;
+
+const AVATAR_WIDTH = 360;
+const AVATAR_HEIGHT = 520;
+const ROAM_INTERVAL_MS = 7000;
+const ROAM_MARGIN = 12;
+
 async function isAvailable(url) {
   try {
     const response = await fetch(url);
@@ -100,6 +111,171 @@ function broadcastSpeechBubbleEnabled() {
   }
 }
 
+function broadcastRoamingState() {
+  const state = {
+    enabled: roamingEnabled,
+    moving: movementInProgress,
+  };
+
+  for (const win of [avatarWindow, chatWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send("fufuu:roam:state", state);
+    }
+  }
+}
+
+function stopRoamingTimer() {
+  if (roamingTimer) {
+    clearTimeout(roamingTimer);
+    roamingTimer = null;
+  }
+
+  roamingTarget = null;
+  movementInProgress = false;
+}
+
+function getAvatarDisplay() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) {
+    return screen.getPrimaryDisplay();
+  }
+
+  const bounds = avatarWindow.getBounds();
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+
+  return screen.getDisplayNearestPoint({ x: centerX, y: centerY });
+}
+
+function clampAvatarPosition(x, y, display = getAvatarDisplay()) {
+  const area = display.workArea;
+  const width = Math.min(avatarWindow.getBounds().width, area.width);
+  const height = Math.min(avatarWindow.getBounds().height, area.height);
+
+  return {
+    x: Math.round(
+      Math.max(area.x, Math.min(x, area.x + area.width - width)),
+    ),
+    y: Math.round(
+      Math.max(area.y, Math.min(y, area.y + area.height - height)),
+    ),
+  };
+}
+
+function scheduleNextRoam(delay = ROAM_INTERVAL_MS) {
+  if (!roamingEnabled || currentDisplayMode !== "3d" || quitting) return;
+
+  if (roamingTimer) clearTimeout(roamingTimer);
+
+  roamingTimer = setTimeout(() => {
+    roamingTimer = null;
+    roamToNewPosition();
+  }, delay);
+}
+
+function roamToNewPosition() {
+  if (
+    !roamingEnabled ||
+    currentDisplayMode !== "3d" ||
+    !avatarWindow ||
+    avatarWindow.isDestroyed() ||
+    movementInProgress
+  ) {
+    return;
+  }
+
+  const display = getAvatarDisplay();
+  const area = display.workArea;
+  const bounds = avatarWindow.getBounds();
+
+  const maxX = Math.max(area.x, area.x + area.width - bounds.width);
+  const maxY = Math.max(area.y, area.y + area.height - bounds.height);
+
+  const candidates = [
+    { x: area.x + ROAM_MARGIN, y: area.y + ROAM_MARGIN },
+    { x: maxX - ROAM_MARGIN, y: area.y + ROAM_MARGIN },
+    { x: area.x + ROAM_MARGIN, y: maxY - ROAM_MARGIN },
+    { x: maxX - ROAM_MARGIN, y: maxY - ROAM_MARGIN },
+    { x: area.x + Math.max(0, (area.width - bounds.width) / 2), y: area.y + ROAM_MARGIN },
+    { x: maxX, y: area.y + Math.max(0, (area.height - bounds.height) / 2) },
+    { x: area.x + Math.max(0, (area.width - bounds.width) / 2), y: maxY },
+    { x: area.x + ROAM_MARGIN, y: area.y + Math.max(0, (area.height - bounds.height) / 2) },
+  ].map((point) => clampAvatarPosition(point.x, point.y, display));
+
+  const current = { x: bounds.x, y: bounds.y };
+  const farCandidates = candidates.filter(
+    (point) =>
+      Math.abs(point.x - current.x) + Math.abs(point.y - current.y) > 160,
+  );
+
+  const pool = farCandidates.length ? farCandidates : candidates;
+  const target = pool[Math.floor(Math.random() * pool.length)];
+
+  lastRoamPosition = current;
+  roamingTarget = target;
+  movementInProgress = true;
+  broadcastRoamingState();
+
+  // Electron moves the transparent avatar window smoothly between positions.
+  avatarWindow.setPosition(target.x, target.y, true);
+
+  // Stop the movement state after the transition, then wait before roaming again.
+  setTimeout(() => {
+    if (quitting) return;
+    movementInProgress = false;
+    roamingTarget = null;
+    broadcastRoamingState();
+    scheduleNextRoam();
+  }, 1100);
+}
+
+function setRoamingEnabled(enabled) {
+  roamingEnabled = enabled && currentDisplayMode === "3d";
+
+  stopRoamingTimer();
+  broadcastRoamingState();
+
+  if (roamingEnabled) {
+    scheduleNextRoam(900);
+  }
+}
+
+function moveAvatarToNearestEdge() {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return;
+
+  const display = getAvatarDisplay();
+  const area = display.workArea;
+  const bounds = avatarWindow.getBounds();
+
+  const currentCenterX = bounds.x + bounds.width / 2;
+  const currentCenterY = bounds.y + bounds.height / 2;
+
+  const distances = [
+    { edge: "left", distance: currentCenterX - area.x },
+    { edge: "right", distance: area.x + area.width - currentCenterX },
+    { edge: "top", distance: currentCenterY - area.y },
+    { edge: "bottom", distance: area.y + area.height - currentCenterY },
+  ].sort((a, b) => a.distance - b.distance);
+
+  const edge = distances[0].edge;
+  let x = bounds.x;
+  let y = bounds.y;
+
+  if (edge === "left") x = area.x;
+  if (edge === "right") x = area.x + area.width - bounds.width;
+  if (edge === "top") y = area.y;
+  if (edge === "bottom") y = area.y + area.height - bounds.height;
+
+  const target = clampAvatarPosition(x, y, display);
+
+  avatarWindow.setPosition(target.x, target.y, true);
+
+  setTimeout(() => {
+    if (avatarWindow && !avatarWindow.isDestroyed()) {
+      avatarWindow.webContents.send("fufuu:avatar:knock");
+    }
+  }, 450);
+}
+
 function createAvatarWindow() {
   if (avatarWindow && !avatarWindow.isDestroyed()) {
     avatarWindow.show();
@@ -107,8 +283,8 @@ function createAvatarWindow() {
   }
 
   avatarWindow = new BrowserWindow({
-    width: 360,
-    height: 520,
+    width: AVATAR_WIDTH,
+    height: AVATAR_HEIGHT,
     minWidth: 240,
     minHeight: 320,
     useContentSize: true,
@@ -139,10 +315,12 @@ function createAvatarWindow() {
 
   avatarWindow.once("ready-to-show", () => {
     avatarWindow?.show();
+    broadcastRoamingState();
   });
 
   avatarWindow.on("closed", () => {
     avatarWindow = null;
+    setRoamingEnabled(false);
   });
 }
 
@@ -173,6 +351,7 @@ function openChatWindow() {
 
   chatWindow.once("ready-to-show", () => {
     chatWindow?.show();
+    broadcastRoamingState();
   });
 
   chatWindow.on("closed", () => {
@@ -273,7 +452,6 @@ function startSpeechBridge() {
   speechBridgeServer = http.createServer((req, res) => {
     const origin = req.headers.origin;
 
-    // Only allow browser requests from the local Fufuu app.
     if (origin && !ALLOWED_ORIGINS.has(origin)) {
       res.writeHead(403);
       res.end("Forbidden");
@@ -303,12 +481,10 @@ function startSpeechBridge() {
 
     if (req.method === "GET" && req.url === "/state") {
       res.writeHead(200);
-      res.end(
-        JSON.stringify({
-          enabled: speechBubbleEnabled,
-          text: speechBubbleText,
-        }),
-      );
+      res.end(JSON.stringify({
+        enabled: speechBubbleEnabled,
+        text: speechBubbleText,
+      }));
       return;
     }
 
@@ -363,12 +539,10 @@ function startSpeechBridge() {
         }
 
         res.writeHead(200);
-        res.end(
-          JSON.stringify({
-            enabled: speechBubbleEnabled,
-            text: speechBubbleText,
-          }),
-        );
+        res.end(JSON.stringify({
+          enabled: speechBubbleEnabled,
+          text: speechBubbleText,
+        }));
       } catch {
         res.writeHead(400);
         res.end(JSON.stringify({ error: "Invalid JSON" }));
@@ -400,11 +574,40 @@ ipcMain.on("fufuu:set-display-mode", (_event, mode) => {
 
   currentDisplayMode = mode;
 
+  if (currentDisplayMode !== "3d") {
+    setRoamingEnabled(false);
+  }
+
   for (const win of [avatarWindow, chatWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send("fufuu:display-mode", currentDisplayMode);
     }
   }
+});
+
+ipcMain.on("fufuu:roam:set-enabled", (_event, enabled) => {
+  if (typeof enabled !== "boolean") return;
+  setRoamingEnabled(enabled);
+});
+
+ipcMain.handle("fufuu:roam:get-state", () => ({
+  enabled: roamingEnabled,
+  moving: movementInProgress,
+}));
+
+ipcMain.on("fufuu:roam:knock", () => {
+  if (currentDisplayMode !== "3d") return;
+
+  const wasRoaming = roamingEnabled;
+  setRoamingEnabled(false);
+  moveAvatarToNearestEdge();
+
+  // Resume roaming after the gesture only if it was previously enabled.
+  setTimeout(() => {
+    if (wasRoaming && currentDisplayMode === "3d") {
+      setRoamingEnabled(true);
+    }
+  }, 2200);
 });
 
 ipcMain.on("fufuu:speech-bubble:set-enabled", (_event, enabled) => {
@@ -444,6 +647,7 @@ app.on("activate", () => {
 
 app.on("before-quit", () => {
   quitting = true;
+  stopRoamingTimer();
   speechBridgeServer?.close();
   viteProcess?.kill();
   storageProcess?.kill();

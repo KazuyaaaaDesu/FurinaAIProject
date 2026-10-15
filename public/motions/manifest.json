@@ -1,0 +1,89 @@
+[
+  {
+    "id": "idle",
+    "label": "Idle",
+    "source": "/motions/furina-Idle.vrma",
+    "loop": true
+  },
+  {
+    "id": "armscrossed",
+    "label": "Arms crossed",
+    "source": "/motions/furina-armscrossed.vrma"
+  },
+  {
+    "id": "armsup",
+    "label": "Arms up",
+    "source": "/motions/furina-armsup.vrma"
+  },
+  {
+    "id": "bow",
+    "label": "Bow",
+    "source": "/motions/furina-bow.vrma"
+  },
+  {
+    "id": "dance",
+    "label": "Dance",
+    "source": "/motions/furina-dance.vrma"
+  },
+  {
+    "id": "fightingstance",
+    "label": "Fighting stance",
+    "source": "/motions/furina-fightingstance.vrma"
+  },
+  {
+    "id": "handbehindhead",
+    "label": "Hand behind head",
+    "source": "/motions/furina-handbehindhead.vrma"
+  },
+  {
+    "id": "handsonhips",
+    "label": "Hands on hips",
+    "source": "/motions/furina-handsonhips.vrma"
+  },
+  {
+    "id": "nein",
+    "label": "Nein",
+    "source": "/motions/furina-nein.vrma"
+  },
+  {
+    "id": "openarms",
+    "label": "Open arms",
+    "source": "/motions/furina-openarms.vrma"
+  },
+  {
+    "id": "pointing",
+    "label": "Pointing",
+    "source": "/motions/furina-pointing.vrma"
+  },
+  {
+    "id": "presenting",
+    "label": "Presenting",
+    "source": "/motions/furina-presenting.vrma"
+  },
+  {
+    "id": "running",
+    "label": "Running",
+    "source": "/motions/furina-running.vrma"
+  },
+  {
+    "id": "sitting",
+    "label": "Sitting",
+    "source": "/motions/furina-sitting.vrma"
+  },
+  {
+    "id": "talking",
+    "label": "Talking",
+    "source": "/motions/furina-talking.vrma",
+    "loop": true
+  },
+  {
+    "id": "walking",
+    "label": "Walking (walkin file)",
+    "source": "/motions/furina-walkin.vrma"
+  },
+  {
+    "id": "wave",
+    "label": "Wave",
+    "source": "/motions/furina-wave.vrma"
+  }
+]
