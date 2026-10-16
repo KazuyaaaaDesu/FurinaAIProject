@@ -16,12 +16,20 @@ const DISPLAY_MODE_CHANNEL = "fufuu-display-mode";
 const AVATAR_COMMAND_KEY = "fufuu-avatar-command";
 const AVATAR_COMMAND_CHANNEL = "fufuu-avatar-command";
 
+// Maximum number of memories Fufuu can store.
 const MAX_MEMORIES = 200;
+
+// Maximum length of a single memory, measured in characters.
 const MAX_MEMORY_LENGTH = 1000;
 
-const AMBIENT_MIN_DELAY = 3 * 1000;
-const AMBIENT_MAX_DELAY = 5 * 1000;
-const AMBIENT_COOLDOWN = 8 * 1000;
+// Minimum delay between ambient screen checks (1 seconds).
+const AMBIENT_MIN_DELAY = 1 * 1000;
+
+// Maximum delay between ambient screen checks (2 seconds).
+const AMBIENT_MAX_DELAY = 2 * 1000;
+
+// Minimum cooldown between ambient comments (3 seconds).
+const AMBIENT_COOLDOWN = 3 * 1000;
 
 type DisplayMode = "2d" | "3d";
 
@@ -909,140 +917,180 @@ function ChatApp() {
     setAmbientStarting(false);
 
     if (showStatus) setError("");
+  }  
+
+async function runAmbientCheck() {
+  if (!ambientEnabledRef.current) return;
+
+  if (ambientCheckRunningRef.current || busyRef.current) {
+    scheduleAmbientCheck();
+    return;
   }
 
-  async function runAmbientCheck() {
+  const video = ambientVideoRef.current;
+  const previousFrame = previousFrameRef.current;
+
+  if (!video || !previousFrame) {
+    stopAmbientMode(false);
+    setError(
+      "Ambient Mode stopped because the screen-sharing stream is unavailable.",
+    );
+    return;
+  }
+
+  ambientCheckRunningRef.current = true;
+
+  try {
+    const currentFrame = await captureFrame(video);
+
     if (!ambientEnabledRef.current) return;
 
-    if (ambientCheckRunningRef.current || busyRef.current) {
-      scheduleAmbientCheck();
-      return;
-    }
+    previousFrameRef.current = currentFrame;
 
-    const video = ambientVideoRef.current;
-    const previousFrame = previousFrameRef.current;
+    const response = await fetch(OLLAMA_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: VISION_MODEL,
+        stream: false,
+        options: {
+          temperature: 0.4,
+          top_p: 0.9,
+          num_ctx: 4096,
+          num_predict: 40,
+        },
+        messages: [
+          {
+            role: "system",
+            content: AMBIENT_SYSTEM_PROMPT,
+          },
+          {
+            role: "user",
+            content:
+              "Look at this current desktop screenshot. " +
+              "Make one brief, natural in-character comment only if " +
+              "something visible is worth mentioning. Avoid generic " +
+              "observations and repeated comments. Otherwise return " +
+              "exactly NO_COMMENT.",
+            images: [currentFrame],
+          },
+        ],
+      }),
+    });
 
-    if (!video || !previousFrame) {
-      stopAmbientMode(false);
-      setError(
-        "Ambient Mode stopped because the screen-sharing stream is unavailable.",
+    if (!response.ok) {
+      throw new Error(
+        `Ambient vision request failed: HTTP ${response.status} — ` +
+          `${await readOllamaError(response)}`,
       );
+    }
+
+    const data = (await response.json()) as {
+      message?: { content?: string };
+      error?: string;
+    };
+
+    if (data.error) throw new Error(data.error);
+    if (!ambientEnabledRef.current) return;
+
+    const remark = cleanAssistantText(data.message?.content ?? "");
+
+    if (!remark || isNoComment(remark)) return;
+
+    const now = Date.now();
+
+    if (now - lastAmbientCommentAtRef.current < AMBIENT_COOLDOWN) {
       return;
     }
 
-    ambientCheckRunningRef.current = true;
+    if (
+      remark.toLowerCase() ===
+      lastAmbientCommentRef.current.toLowerCase()
+    ) {
+      return;
+    }
+
+    if (busyRef.current) return;
+
+    lastAmbientCommentAtRef.current = now;
+    lastAmbientCommentRef.current = remark;
+
+    const updatedMessages: Message[] = [
+      ...messagesRef.current,
+      { role: "assistant", content: remark },
+    ];
+
+    messagesRef.current = updatedMessages;
+    setMessages(updatedMessages);
 
     try {
-      const currentFrame = await captureFrame(video);
-
-      if (!ambientEnabledRef.current) return;
-
-      previousFrameRef.current = currentFrame;
-
-      const response = await fetch(OLLAMA_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: VISION_MODEL,
-          stream: false,
-          options: {
-            temperature: 0.55,
-            top_p: 0.9,
-            num_predict: 90,
-          },
-          messages: [
-            { role: "system", content: AMBIENT_SYSTEM_PROMPT },
-            {
-              role: "user",
-              content:
-                "Look at this current desktop screenshot. If there is something visible worth a brief, natural Furina-style comment, say it. Otherwise return exactly NO_COMMENT.",
-              images: [currentFrame],
-            },
-          ],
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error(
-          `Ambient vision request failed: HTTP ${response.status} — ${await readOllamaError(response)}`,
-        );
-      }
-
-      const data = (await response.json()) as {
-        message?: { content?: string };
-        error?: string;
-      };
-
-      if (data.error) throw new Error(data.error);
-      if (!ambientEnabledRef.current) return;
-
-      const remark = cleanAssistantText(data.message?.content ?? "");
-
-      if (isNoComment(remark)) return;
-
-      const now = Date.now();
-
-      if (now - lastAmbientCommentAtRef.current < AMBIENT_COOLDOWN) return;
-
-      if (
-        remark.toLowerCase() === lastAmbientCommentRef.current.toLowerCase()
-      ) {
-        return;
-      }
-
-      if (busyRef.current) return;
-
-      lastAmbientCommentAtRef.current = now;
-      lastAmbientCommentRef.current = remark;
-
-      const updatedMessages: Message[] = [
-        ...messagesRef.current,
-        { role: "assistant", content: remark },
-      ];
-
-      messagesRef.current = updatedMessages;
-      setMessages(updatedMessages);
-
-      try {
-        const emotion = await chooseFufuuEmotion(
-          remark,
-          new AbortController().signal,
-        );
-
-        if (ambientEnabledRef.current) {
-          emotionChannelRef.current?.postMessage(emotion);
-        }
-      } catch (emotionError) {
-        console.warn(
-          "[Fufuu] Ambient emotion classification failed:",
-          emotionError,
-        );
-
-        if (ambientEnabledRef.current) {
-          emotionChannelRef.current?.postMessage("neutral");
-        }
-      }
-
-      try {
-        await saveConversation(updatedMessages);
-      } catch (saveError) {
-        console.warn("[Fufuu] Could not save ambient comment:", saveError);
-      }
-    } catch (ambientError) {
-      console.error("[Fufuu] Ambient check failed:", ambientError);
+      const emotion = await chooseFufuuEmotion(
+        remark,
+        new AbortController().signal,
+      );
 
       if (ambientEnabledRef.current) {
-        setError(`Ambient check failed: ${getErrorMessage(ambientError)}`);
+        emotionChannelRef.current?.postMessage(emotion);
       }
-    } finally {
-      ambientCheckRunningRef.current = false;
+    } catch (emotionError) {
+      console.warn(
+        "[Fufuu] Ambient emotion classification failed:",
+        emotionError,
+      );
 
       if (ambientEnabledRef.current) {
-        scheduleAmbientCheck();
+        emotionChannelRef.current?.postMessage("neutral");
       }
     }
-  }
 
+    try {
+      await saveConversation(updatedMessages);
+    } catch (saveError) {
+      console.warn(
+        "[Fufuu] Could not save ambient comment:",
+        saveError,
+      );
+    }
+  } catch (ambientError) {
+    const errorMessage = getErrorMessage(ambientError);
+
+    console.error("[Fufuu] Ambient check failed:", ambientError);
+
+    const memoryError =
+      /requires more system memory|not enough memory/i.test(errorMessage);
+
+    const contextError =
+      /exceeds the available context size|context length|too many tokens/i.test(
+        errorMessage,
+      );
+
+    if (memoryError || contextError) {
+      stopAmbientMode(false);
+
+      setError(
+        memoryError
+          ? "Ambient Mode paused because the vision model needs more memory. Reduce screenshot size or context usage before restarting."
+          : "Ambient Mode paused because the screenshot request exceeds the vision context. Increase num_ctx carefully or reduce screenshot size before restarting.",
+      );
+
+      return;
+    }
+
+    if (ambientEnabledRef.current) {
+      setError(`Ambient check failed: ${errorMessage}`);
+    }
+  } finally {
+    ambientCheckRunningRef.current = false;
+
+    if (ambientEnabledRef.current) {
+      scheduleAmbientCheck();
+    }
+  }
+}
+
+
+
+  
   function scheduleAmbientCheck() {
     if (!ambientEnabledRef.current) return;
 
@@ -1055,6 +1103,7 @@ function ChatApp() {
       void runAmbientCheck();
     }, getRandomAmbientDelay());
   }
+
 
   async function startAmbientMode() {
     if (ambientEnabledRef.current || ambientStarting || !storageReady) {
@@ -1335,6 +1384,7 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
           stream: true,
           options: {
             temperature: 0.75,
+            num_ctx: 2048,
             top_p: 0.9,
             top_k: 40,
             repeat_penalty: 1.2,
