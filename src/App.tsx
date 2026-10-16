@@ -956,7 +956,7 @@ async function runAmbientCheck() {
         options: {
           temperature: 0.4,
           top_p: 0.9,
-          num_ctx: 4096,
+          num_ctx: 8192,
           num_predict: 40,
         },
         messages: [
