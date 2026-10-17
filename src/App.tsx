@@ -1041,6 +1041,22 @@ async function runAmbientCheck() {
     messagesRef.current = updatedMessages;
     setMessages(updatedMessages);
 
+    // Speak Ambient Mode comments through Piper Plus when voice is enabled.
+      if (voiceEnabled && window.sakuraDesktop?.speakText) {
+        void window.sakuraDesktop
+          .speakText(remark)
+          .then((result) => {
+            if (!result.ok && result.error) {
+              console.error("[Fufuu] Ambient voice failed:", result.error);
+              setError(`Fufuu voice failed: ${result.error}`);
+            }
+          })
+          .catch((voiceError: unknown) => {
+            console.error("[Fufuu] Ambient voice failed:", voiceError);
+            setError(`Fufuu voice failed: ${getErrorMessage(voiceError)}`);
+          });
+      }
+
     try {
       const emotion = await chooseFufuuEmotion(
         remark,
@@ -1123,12 +1139,20 @@ async function runAmbientCheck() {
   }
 
 
+  
   async function startAmbientMode() {
     if (ambientEnabledRef.current || ambientStarting || !storageReady) {
       return;
     }
 
     setError("");
+
+    console.log("[Ambient] Electron:", Boolean(window.sakuraDesktop));
+    console.log(
+      "[Ambient] getDisplayMedia:",
+      typeof navigator.mediaDevices?.getDisplayMedia,
+    );
+    console.log("[Ambient] secure context:", window.isSecureContext);
 
     if (!navigator.mediaDevices?.getDisplayMedia) {
       setError(
@@ -1141,6 +1165,7 @@ async function runAmbientCheck() {
 
     let stream: MediaStream | null = null;
     let video: HTMLVideoElement | null = null;
+    let startupStep = "requesting screen capture";
 
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({
@@ -1148,10 +1173,13 @@ async function runAmbientCheck() {
         audio: false,
       });
 
+      startupStep = "creating video element";
       video = document.createElement("video");
       video.srcObject = stream;
       video.muted = true;
       video.playsInline = true;
+
+      startupStep = "waiting for video metadata";
 
       if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
         await new Promise<void>((resolve, reject) => {
@@ -1161,19 +1189,25 @@ async function runAmbientCheck() {
         });
       }
 
+      startupStep = "playing captured video";
       await video.play();
 
       if (!video.videoWidth || !video.videoHeight) {
         throw new Error("The selected screen has no readable dimensions.");
       }
 
+      startupStep = "capturing initial frame";
       const baseline = await captureFrame(video);
+
+      startupStep = "checking screen stream";
 
       if (!stream.active) {
         throw new Error(
           "Screen sharing ended before Ambient Mode could start.",
         );
       }
+
+      startupStep = "initializing Ambient Mode";
 
       ambientStreamRef.current = stream;
       ambientVideoRef.current = video;
@@ -1199,6 +1233,19 @@ async function runAmbientCheck() {
       setError("");
       scheduleAmbientCheck();
     } catch (startError) {
+      console.error("[Ambient] Failed at step:", startupStep);
+      console.error("[Ambient] Startup failed:", startError);
+      console.error(
+        "[Ambient] Error name:",
+        startError instanceof Error ? startError.name : typeof startError,
+      );
+      console.error(
+        "[Ambient] Error message:",
+        startError instanceof Error
+          ? startError.message
+          : String(startError),
+      );
+
       stream?.getTracks().forEach((track) => track.stop());
 
       if (video) {
@@ -1220,6 +1267,7 @@ async function runAmbientCheck() {
       setAmbientStarting(false);
     }
   }
+
 
   async function captureScreen() {
     setError("");

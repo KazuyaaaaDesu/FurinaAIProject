@@ -1,5 +1,11 @@
 ﻿
-const { app, BrowserWindow, ipcMain, screen } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  screen,
+  desktopCapturer,
+} = require("electron");
 const path = require("node:path");
 const os = require("node:os");
 const { spawn } = require("node:child_process");
@@ -1388,7 +1394,21 @@ async function speakWithPiperPlus(text, options = {}) {
   // Piper length_scale is inverse speed: larger values speak more slowly.
   // Keep speech natural without stretching every utterance so much that
   // playback becomes sluggish. Piper length_scale is inverse speed.
-  const lengthScale = String(Math.max(0.95, Math.min(1.65, 1.05 / safeRate)));
+  const voiceSettings =
+  language === "ja"
+    ? {
+        lengthScale: 1.08,
+        noiseScale: 0.60,
+        noiseW: 0.75,
+      }
+    : {
+        lengthScale: Math.max(
+          0.95,
+          Math.min(1.65, 1.08 / safeRate)
+        ),
+        noiseScale: 0.70,
+        noiseW: 0.80,
+      };
   const chunks = splitSpeechIntoChunks(cleanText);
   const childEnv = {
     ...process.env,
@@ -1406,7 +1426,9 @@ async function speakWithPiperPlus(text, options = {}) {
           "--model", model,
           "--config", config,
           "--language", language,
-          "--length_scale", lengthScale,
+          "--length_scale", String(voiceSettings.lengthScale),
+          "--noise_scale", String(voiceSettings.noiseScale),
+          "--noise_w", String(voiceSettings.noiseW),
           "--text", chunks[index],
           "--output_file", outputFile,
         ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"], env: childEnv, cwd: piperRoot });
@@ -1923,6 +1945,38 @@ ipcMain.handle("fufuu:speech-bubble:get-state", () => ({
   enabled: speechBubbleEnabled,
   text: speechBubbleText,
 }));
+
+app.whenReady().then(() => {
+  const ses = require("electron").session.defaultSession;
+
+  ses.setDisplayMediaRequestHandler(
+    async (_request, callback) => {
+      try {
+        const sources = await desktopCapturer.getSources({
+          types: ["screen", "window"],
+          thumbnailSize: { width: 0, height: 0 },
+          fetchWindowIcons: false,
+        });
+
+        const screenSource = sources.find(
+          (source) => source.id.startsWith("screen:"),
+        );
+
+        if (!screenSource) {
+          console.error("[Ambient] No screen-capture source available.");
+          callback({});
+          return;
+        }
+
+        callback({ video: screenSource });
+      } catch (error) {
+        console.error("[Ambient] Display-media handler failed:", error);
+        callback({});
+      }
+    },
+    { useSystemPicker: true },
+  );
+});
 
 app.whenReady().then(async () => {
   try {
