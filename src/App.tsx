@@ -22,14 +22,14 @@ const MAX_MEMORIES = 200;
 // Maximum length of a single memory, measured in characters.
 const MAX_MEMORY_LENGTH = 1000;
 
-// Minimum delay between ambient screen checks (1 seconds).
-const AMBIENT_MIN_DELAY = 1 * 1000;
+// Minimum delay between ambient screen checks (8 seconds).
+const AMBIENT_MIN_DELAY = 8 * 1000;
 
-// Maximum delay between ambient screen checks (2 seconds).
-const AMBIENT_MAX_DELAY = 2 * 1000;
+// Maximum delay between ambient screen checks (12 seconds).
+const AMBIENT_MAX_DELAY = 12 * 1000;
 
-// Minimum cooldown between ambient comments (3 seconds).
-const AMBIENT_COOLDOWN = 3 * 1000;
+// Minimum cooldown between ambient comments (15 seconds).
+const AMBIENT_COOLDOWN = 15 * 1000;
 
 type DisplayMode = "2d" | "3d";
 
