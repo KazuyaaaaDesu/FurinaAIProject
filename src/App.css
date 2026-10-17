@@ -936,3 +936,19 @@ select:focus-visible {
     flex: 1;
   }
 }
+
+/* Voice options dialog */
+.voice-options-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 20px; background: rgba(19, 12, 25, .58); backdrop-filter: blur(8px); }
+.voice-options-dialog { width: min(430px, 100%); padding: 24px; border: 1px solid rgba(255, 183, 215, .45); border-radius: 20px; color: var(--text, #fff0f6); background: var(--panel, #241a2c); box-shadow: 0 24px 80px rgba(0,0,0,.35); }
+.voice-options-heading { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; }
+.voice-options-heading h2 { margin: 2px 0 0; font-size: 22px; }
+.voice-options-eyebrow { margin: 0; color: #e9a6c8; font-size: 10px; font-weight: 800; letter-spacing: .16em; }
+.voice-options-close { width: 34px; height: 34px; border: 0; border-radius: 10px; color: inherit; background: rgba(255,255,255,.08); font-size: 24px; cursor: pointer; }
+.voice-option-field { display: flex; flex-direction: column; gap: 10px; margin: 18px 0; font-size: 13px; font-weight: 650; }
+.voice-option-field select { width: 100%; padding: 11px 12px; border: 1px solid rgba(255,183,215,.3); border-radius: 10px; color: inherit; background: rgba(255,255,255,.07); font: inherit; }
+.voice-option-field select option { color: #241a2c; }
+.voice-option-field input[type="range"] { width: 100%; accent-color: #e9a6c8; }
+.voice-option-field strong { align-self: flex-end; margin-bottom: -22px; color: #f0b4d1; }
+.voice-option-help { color: var(--muted, #c4b5c9); font-size: 11px; line-height: 1.5; font-weight: 400; }
+.voice-options-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 24px; padding-top: 16px; border-top: 1px solid rgba(255,255,255,.1); }
+.voice-options-footer span { color: var(--muted, #c4b5c9); font-size: 11px; }

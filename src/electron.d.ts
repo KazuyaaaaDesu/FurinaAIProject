@@ -101,6 +101,8 @@ declare global {
       completeKnock: () => void;
       onKnock: (callback: () => void) => () => void;
 
+      speakText: (text: string, options?: { language?: "auto" | "ja" | "en" | "zh"; rate?: number }) => Promise<{ ok: boolean; error?: string; cancelled?: boolean }>;
+      stopSpeech: () => Promise<{ ok: boolean }>;
       setSpeechBubbleEnabled: (enabled: boolean) => void;
       updateSpeechBubble: (text: string) => void;
       hideSpeechBubble: () => void;

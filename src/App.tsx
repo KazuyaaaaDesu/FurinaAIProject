@@ -33,6 +33,17 @@ const AMBIENT_COOLDOWN = 3 * 1000;
 
 type DisplayMode = "2d" | "3d";
 
+type VoiceLanguage = "auto" | "ja" | "en" | "zh";
+
+function isVoiceLanguage(value: string | null): value is VoiceLanguage {
+  return (
+    value === "auto" ||
+    value === "ja" ||
+    value === "en" ||
+    value === "zh"
+  );
+}
+
 type FufuuEmotion =
   | "neutral"
   | "happy"
@@ -431,6 +442,13 @@ function ChatApp() {
   const [ambientEnabled, setAmbientEnabled] = useState(false);
   const [ambientStarting, setAmbientStarting] = useState(false);
   const [speechBubbleEnabled, setSpeechBubbleEnabled] = useState(false);
+  const [voiceEnabled, setVoiceEnabled] = useState(() => window.localStorage.getItem("fufuu-voice-enabled") === "true");
+  const [voiceOptionsOpen, setVoiceOptionsOpen] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState<VoiceLanguage>(() => {
+  const saved = window.localStorage.getItem("fufuu-voice-language");
+    return isVoiceLanguage(saved) ? saved : "auto";
+  });
+  const [voiceRate, setVoiceRate] = useState(() => Number(window.localStorage.getItem("fufuu-voice-rate") || "1"));
 
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() =>
     window.localStorage.getItem("fufuu-display-mode") === "3d" ? "3d" : "2d",
@@ -1457,6 +1475,16 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
       messagesRef.current = completeConversation;
       setMessages(completeConversation);
 
+      if (voiceEnabled && window.sakuraDesktop?.speakText) {
+        void window.sakuraDesktop.speakText(finalReply, { language: voiceLanguage, rate: voiceRate }).then((result) => {
+          if (!result.ok && result.error) {
+            setError(`Fufuu voice failed: ${result.error}`);
+          }
+        }).catch((voiceError: unknown) => {
+          setError(`Fufuu voice failed: ${getErrorMessage(voiceError)}`);
+        });
+      }
+
       try {
         const emotion = await chooseFufuuEmotion(
           finalReply,
@@ -1651,6 +1679,33 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
               title="Show or hide Fufuu's floating speech bubble"
             >
               {speechBubbleEnabled ? "Bubble ON · Hide" : "Bubble OFF"}
+            </button>
+
+            <button
+              type="button"
+              className="capture-button"
+              aria-pressed={voiceEnabled}
+              title="Enable or disable Piper Plus voice for new Fufuu replies"
+              onClick={() => {
+                const nextEnabled = !voiceEnabled;
+                setVoiceEnabled(nextEnabled);
+                window.localStorage.setItem("fufuu-voice-enabled", String(nextEnabled));
+                if (!nextEnabled) {
+                  void window.sakuraDesktop?.stopSpeech();
+                }
+              }}
+            >
+              {voiceEnabled ? "Voice ON · Stop" : "Voice OFF"}
+            </button>
+            <button
+              type="button"
+              className="capture-button voice-options-button"
+              aria-haspopup="dialog"
+              aria-expanded={voiceOptionsOpen}
+              onClick={() => setVoiceOptionsOpen(true)}
+              title="Choose Fufuu's speech language and speed"
+            >
+              Voice Options ⚙
             </button>
 
             <button
@@ -1924,6 +1979,47 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
           <span>Powered by Ollama</span>
         </footer>
       </section>
+      {voiceOptionsOpen && (
+        <div className="voice-options-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setVoiceOptionsOpen(false); }}>
+          <section className="voice-options-dialog" role="dialog" aria-modal="true" aria-labelledby="voice-options-title">
+            <div className="voice-options-heading">
+              <div><p className="voice-options-eyebrow">PIPER PLUS</p><h2 id="voice-options-title">Voice options</h2></div>
+              <button type="button" className="voice-options-close" onClick={() => setVoiceOptionsOpen(false)} aria-label="Close voice options">×</button>
+            </div>
+            <label className="voice-option-field">
+              Speech language
+              <select
+                value={voiceLanguage}
+                onChange={(event) => {
+                  const value = event.target.value;
+
+                  if (!isVoiceLanguage(value)) return;
+
+                  setVoiceLanguage(value);
+                  window.localStorage.setItem("fufuu-voice-language", value);
+                }}
+              >
+                <option value="auto">Automatic (detect from reply)</option>
+                <option value="ja">Japanese</option>
+                <option value="en">English</option>
+                <option value="zh">Chinese (Mandarin)</option>
+              </select>
+
+              <span className="voice-option-help">
+                Automatic chooses Japanese or Chinese for those scripts, and English otherwise.
+              </span>
+            </label>
+            <label className="voice-option-field">Speaking speed <strong>{voiceRate.toFixed(2)}×</strong>
+              <input type="range" min="0.7" max="1.3" step="0.05" value={voiceRate} onChange={(event) => { const value = Number(event.target.value); setVoiceRate(value); window.localStorage.setItem("fufuu-voice-rate", String(value)); }} />
+              <span className="voice-option-help">Lower is slower; higher is faster. Applies to the next reply.</span>
+            </label>
+            <div className="voice-options-footer">
+              <span>{voiceEnabled ? "Voice is enabled" : "Voice is currently off"}</span>
+              <button type="button" className="capture-button" onClick={() => setVoiceOptionsOpen(false)}>Done</button>
+            </div>
+          </section>
+        </div>
+      )}
     </main>
   );
 }

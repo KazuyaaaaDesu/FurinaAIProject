@@ -168,6 +168,17 @@ contextBridge.exposeInMainWorld("sakuraDesktop", {
     return () => ipcRenderer.removeListener("fufuu:avatar:knock", listener);
   },
 
+  speakText(text, options) {
+    if (typeof text === "string") {
+      return ipcRenderer.invoke("fufuu:voice:speak", text, options);
+    }
+    return Promise.resolve({ ok: false, error: "Text must be a string." });
+  },
+
+  stopSpeech() {
+    return ipcRenderer.invoke("fufuu:voice:stop");
+  },
+
   setSpeechBubbleEnabled(enabled) {
     if (typeof enabled === "boolean") {
       ipcRenderer.send("fufuu:speech-bubble:set-enabled", enabled);

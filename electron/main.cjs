@@ -1,6 +1,7 @@
 ﻿
 const { app, BrowserWindow, ipcMain, screen } = require("electron");
 const path = require("node:path");
+const os = require("node:os");
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -1225,6 +1226,233 @@ function updateSpeechBubbleText(text) {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Piper Plus voice output
+// Uses sentence-sized chunks and a slower default rate for more natural pacing.
+// -----------------------------------------------------------------------------
+let speechRequestId = 0;
+let activePiperProcess = null;
+let activeAudioProcess = null;
+
+function getPiperPlusRoots() {
+  // The engine and model assets may live in different roots. In particular,
+  // Fufuu's project-local resources copy should be checked even when the
+  // external Piper Plus installation also contains the executable.
+  return [...new Set([
+    process.env.PIPER_PLUS_ROOT,
+    path.join(ROOT, "resources", "piper-plus"),
+    "D:\\AI\\PiperPlus\\piper-plus",
+    "D:\\AI\\PiperPlus",
+  ].filter(Boolean).map((candidate) => path.resolve(candidate)))];
+}
+
+function findPiperPlusAsset(envName, relativePath) {
+  const override = process.env[envName];
+  if (override) return path.resolve(override);
+
+  const candidates = [];
+  for (const root of getPiperPlusRoots()) {
+    candidates.push(path.join(root, relativePath));
+    // Also support layouts where the executable is in piper-plus/bin while
+    // models are in the parent install's models directory.
+    candidates.push(path.join(path.dirname(root), relativePath));
+  }
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+function getPiperPlusEngine() {
+  const roots = getPiperPlusRoots();
+  const candidates = roots.map((root) => path.join(root, "bin", "piper-plus.exe"));
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0];
+}
+
+function stopPiperSpeech() {
+  speechRequestId += 1;
+  for (const child of [activePiperProcess, activeAudioProcess]) {
+    if (child && child.exitCode === null) {
+      try { child.kill(); } catch {}
+    }
+  }
+  activePiperProcess = null;
+  activeAudioProcess = null;
+  return true;
+}
+
+function splitSpeechIntoChunks(text, maxChars = 360) {
+  const normalized = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/https?:\/\/\S+/g, " link ")
+    .replace(/[ \t]+/g, " ")
+    .trim();
+  if (!normalized) return [];
+
+  // Combine short sentences into a single synthesis job. Starting a new
+  // Piper process for every short sentence causes avoidable CPU spikes and
+  // long gaps between playback.
+  const sentences = normalized.match(/[^。！？.!?]+[。！？.!?]*/gu) || [normalized];
+  const chunks = [];
+  let pending = "";
+
+  const flush = () => {
+    if (pending.trim()) chunks.push(pending.trim());
+    pending = "";
+  };
+
+  for (const rawSentence of sentences) {
+    const sentence = rawSentence.trim();
+    if (!sentence) continue;
+
+    if (sentence.length <= maxChars) {
+      const combined = [pending, sentence].filter(Boolean).join(" ");
+      if (combined.length <= maxChars) {
+        pending = combined;
+      } else {
+        flush();
+        pending = sentence;
+      }
+      continue;
+    }
+
+    flush();
+    // Split long sentences at clause boundaries where possible.
+    const clauses = sentence.split(/(?<=[,，、;；:：])\s*/u).filter(Boolean);
+    for (const rawClause of clauses) {
+      const clause = rawClause.trim();
+      if (!clause) continue;
+      const combined = [pending, clause].filter(Boolean).join(" ");
+      if (combined.length <= maxChars) {
+        pending = combined;
+      } else {
+        flush();
+        if (clause.length <= maxChars) {
+          pending = clause;
+        } else {
+          for (let i = 0; i < clause.length; i += maxChars) {
+            chunks.push(clause.slice(i, i + maxChars));
+          }
+        }
+      }
+    }
+    flush();
+  }
+  flush();
+  return chunks;
+}
+
+function runChild(child, label) {
+  return new Promise((resolve, reject) => {
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.once("error", reject);
+    child.once("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`${label} exited with code ${code}${stderr ? `: ${stderr.trim()}` : ""}`));
+    });
+  });
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function speakWithPiperPlus(text, options = {}) {
+  const cleanText = typeof text === "string" ? text.trim().slice(0, 1200) : "";
+  if (!cleanText) return { ok: false, error: "No text to speak." };
+
+  stopPiperSpeech();
+  const requestId = speechRequestId;
+  const engine = getPiperPlusEngine();
+  const model = findPiperPlusAsset(
+    "PIPER_PLUS_MODEL",
+    path.join("models", "tsukuyomi-chan-6lang-fp16.onnx"),
+  );
+  const config = findPiperPlusAsset(
+    "PIPER_PLUS_CONFIG",
+    path.join("models", "config.json"),
+  );
+  const piperRoot = path.dirname(path.dirname(engine));
+
+  if (!fs.existsSync(engine)) return { ok: false, error: `Piper Plus executable not found: ${engine}` };
+  if (!fs.existsSync(model)) return { ok: false, error: `Piper Plus model not found: ${model}` };
+  if (!fs.existsSync(config)) return { ok: false, error: `Piper Plus config not found: ${config}` };
+
+  const detectedLanguage = /[\u3040-\u30ff]/u.test(cleanText)
+    ? "ja"
+    : (/[\u3400-\u9fff]/u.test(cleanText) ? "zh" : "en");
+  const requestedLanguage = ["ja", "en", "zh"].includes(options?.language) ? options.language : "auto";
+  const language = requestedLanguage === "auto" ? detectedLanguage : requestedLanguage;
+  const rate = Number(options?.rate);
+  const safeRate = Number.isFinite(rate) && rate >= 0.5 && rate <= 1.3 ? rate : 0.65;
+  // Add a deliberately slower baseline even when the UI sends rate=1.0.
+  // Piper length_scale is inverse speed: larger values speak more slowly.
+  // Keep speech natural without stretching every utterance so much that
+  // playback becomes sluggish. Piper length_scale is inverse speed.
+  const lengthScale = String(Math.max(0.95, Math.min(1.65, 1.05 / safeRate)));
+  const chunks = splitSpeechIntoChunks(cleanText);
+  const childEnv = {
+    ...process.env,
+    OPENJTALK_DICTIONARY_PATH: path.join(ROOT, "resources", "piper-plus", "share", "open_jtalk", "dic"),
+    CMUDICT_PATH: path.join(ROOT, "resources", "piper-plus", "share", "piper-plus", "dicts", "cmudict_data.json"),
+    PIPER_PLUS_DICTIONARIES_PATH: path.join(ROOT, "resources", "piper-plus", "share", "piper-plus", "dicts"),
+  };
+
+  try {
+    for (let index = 0; index < chunks.length; index += 1) {
+      if (requestId !== speechRequestId || quitting) return { ok: false, cancelled: true };
+      const outputFile = path.join(os.tmpdir(), `fufuu-voice-${process.pid}-${requestId}-${index}.wav`);
+      try {
+        const synth = spawn(engine, [
+          "--model", model,
+          "--config", config,
+          "--language", language,
+          "--length_scale", lengthScale,
+          "--text", chunks[index],
+          "--output_file", outputFile,
+        ], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"], env: childEnv, cwd: piperRoot });
+        activePiperProcess = synth;
+        await runChild(synth, "Piper Plus");
+        activePiperProcess = null;
+        if (requestId !== speechRequestId || quitting) return { ok: false, cancelled: true };
+        if (!fs.existsSync(outputFile) || fs.statSync(outputFile).size < 44) {
+          throw new Error("Piper Plus did not create a valid WAV file.");
+        }
+
+        // PlaySync keeps each sentence in order. PowerShell receives a base64
+        // encoded script to avoid path quoting issues on Windows.
+        const psScript = `$player = New-Object System.Media.SoundPlayer('${outputFile.replace(/'/g, "''")}'); $player.Load(); $player.PlaySync(); $player.Dispose();`;
+        const encoded = Buffer.from(psScript, "utf16le").toString("base64");
+        const player = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], {
+          windowsHide: true, stdio: ["ignore", "ignore", "pipe"],
+        });
+        activeAudioProcess = player;
+        await runChild(player, "Audio playback");
+        activeAudioProcess = null;
+      } finally {
+        try { if (fs.existsSync(outputFile)) fs.unlinkSync(outputFile); } catch {}
+      }
+      if (index < chunks.length - 1) {
+        const chunk = chunks[index];
+        const isSentenceEnd = /[。！？.!?]$/u.test(chunk);
+        const isClauseEnd = /[,，、;；:：]$/u.test(chunk);
+        // Short, natural breathing room between separately synthesized chunks.
+        // Keep it brief so pauses feel conversational without making playback drag.
+        await delay(isSentenceEnd ? 300 : isClauseEnd ? 155 : 90);
+      }
+    }
+    return { ok: true, language, chunks: chunks.length };
+  } catch (error) {
+    if (requestId !== speechRequestId) return { ok: false, cancelled: true };
+    console.error("[Fufuu] Piper Plus speech failed:", error);
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (requestId === speechRequestId) {
+      activePiperProcess = null;
+      activeAudioProcess = null;
+    }
+  }
+}
+
 function startSpeechBridge() {
   if (speechBridgeServer) return;
 
@@ -1666,6 +1894,17 @@ ipcMain.on("fufuu:roam:knock-finished", () => {
   }
 });
 
+ipcMain.handle("fufuu:voice:speak", async (event, text, options = {}) => {
+  if (typeof text !== "string") throw new Error("Speech text must be a string.");
+  const senderUrl = event.senderFrame?.url || "";
+  if (senderUrl && !ALLOWED_ORIGINS.has(new URL(senderUrl).origin)) {
+    throw new Error("Voice requests are only allowed from Fufuu windows.");
+  }
+  return speakWithPiperPlus(text, options);
+});
+
+ipcMain.handle("fufuu:voice:stop", () => stopPiperSpeech());
+
 ipcMain.on("fufuu:speech-bubble:set-enabled", (_event, enabled) => {
   if (typeof enabled !== "boolean") return;
   setSpeechBubbleEnabled(enabled);
@@ -1736,6 +1975,7 @@ app.on("activate", () => {
 app.on("before-quit", () => {
   quitting = true;
   stopRoamingTimer();
+  stopPiperSpeech();
   speechBridgeServer?.close();
   viteProcess?.kill();
   storageProcess?.kill();
