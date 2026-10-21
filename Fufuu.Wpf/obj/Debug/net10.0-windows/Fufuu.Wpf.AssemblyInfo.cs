@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Fufuu.Wpf")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+94314d41189e29b719ae544f46920488f1d0d45d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2b7fac360b87056523bac32609649fbbdb88b4e0")]
 [assembly: System.Reflection.AssemblyProductAttribute("Fufuu.Wpf")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Fufuu.Wpf")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

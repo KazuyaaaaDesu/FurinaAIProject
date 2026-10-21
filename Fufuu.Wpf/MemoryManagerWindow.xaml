@@ -1,0 +1,130 @@
+<Window x:Class="Fufuu.Wpf.MemoryManagerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Fufuu · Memories"
+        Width="720"
+        Height="580"
+        MinWidth="560"
+        MinHeight="440"
+        WindowStartupLocation="CenterOwner"
+        Background="#100D18"
+        Foreground="#FFF0FC">
+    <Border Margin="1"
+            Padding="20"
+            CornerRadius="16"
+            BorderBrush="#493958"
+            BorderThickness="1"
+            Background="#171220">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0"
+                    Margin="0,0,0,16">
+                <TextBlock Text="Fufuu's Memories"
+                           FontSize="22"
+                           FontWeight="SemiBold"/>
+                <TextBlock x:Name="CountText"
+                           Text="Loading saved memories..."
+                           Foreground="#B8A6BF"
+                           Margin="0,6,0,0"/>
+            </StackPanel>
+
+            <Border Grid.Row="1"
+                    Padding="12"
+                    Margin="0,0,0,12"
+                    CornerRadius="12"
+                    Background="#211A2C"
+                    BorderBrush="#493958"
+                    BorderThickness="1">
+                <StackPanel>
+                    <TextBlock x:Name="EditorTitle"
+                               Text="Add a memory"
+                               FontWeight="SemiBold"
+                               Margin="0,0,0,8"/>
+                    <TextBox x:Name="MemoryInput"
+                             MinHeight="75"
+                             MaxHeight="130"
+                             Padding="10"
+                             AcceptsReturn="True"
+                             TextWrapping="Wrap"
+                             VerticalScrollBarVisibility="Auto"
+                             Background="#15111F"
+                             Foreground="#FFF0FC"
+                             BorderBrush="#594268"
+                             CaretBrush="White"
+                             ToolTip="Example: I prefer short, friendly replies."/>
+                    <StackPanel Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                Margin="0,10,0,0">
+                        <Button x:Name="CancelEditButton"
+                                Content="Cancel edit"
+                                Padding="12,7"
+                                Margin="0,0,8,0"
+                                Click="CancelEditButton_Click"
+                                Visibility="Collapsed"/>
+                        <Button x:Name="SaveMemoryButton"
+                                Content="Save memory"
+                                Padding="14,7"
+                                Background="#6F4A8C"
+                                Foreground="White"
+                                Click="SaveMemoryButton_Click"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <ListBox x:Name="MemoryList"
+                     Grid.Row="2"
+                     Background="#15111F"
+                     Foreground="#FFF0FC"
+                     BorderBrush="#30263D"
+                     SelectionChanged="MemoryList_SelectionChanged"
+                     ScrollViewer.VerticalScrollBarVisibility="Auto">
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Border Padding="12"
+                                Margin="4"
+                                Background="#211A2C"
+                                BorderBrush="#493958"
+                                BorderThickness="1"
+                                CornerRadius="10">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Content}"
+                                           TextWrapping="Wrap"
+                                           FontSize="13"/>
+                                <TextBlock Text="{Binding CreatedAt}"
+                                           Foreground="#AA9BB8"
+                                           FontSize="10"
+                                           Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <DockPanel Grid.Row="3"
+                    Margin="0,12,0,0">
+                <TextBlock x:Name="StatusText"
+                           Text="Memories stay in your local memory store."
+                           Foreground="#AA9BB8"
+                           VerticalAlignment="Center"
+                           TextWrapping="Wrap"/>
+                <StackPanel DockPanel.Dock="Right"
+                            Orientation="Horizontal">
+                    <Button Content="Delete selected"
+                            Padding="12,8"
+                            Margin="8,0,0,0"
+                            Click="DeleteMemoryButton_Click"/>
+                    <Button Content="Refresh"
+                            Padding="12,8"
+                            Margin="8,0,0,0"
+                            Click="RefreshButton_Click"/>
+                </StackPanel>
+            </DockPanel>
+        </Grid>
+    </Border>
+</Window>
