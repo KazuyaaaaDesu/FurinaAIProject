@@ -1,3 +1,4 @@
+
 using System;
 using System.IO;
 using System.Linq;
@@ -7,17 +8,45 @@ using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using MessageBox = System.Windows.MessageBox;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows.Interop;
 
 namespace Fufuu.Wpf.Pet;
 
 /// <summary>
 /// Transparent WPF shell for the React/PIXI Live2D and Three.js VRM viewers.
-/// Handles WebView2 diagnostics, global mouse tracking, roaming, settings,
-/// and communication with the JavaScript pet stage.
+/// Handles WebView2 diagnostics, global hotkeys, mouse tracking, roaming,
+/// settings, and communication with the JavaScript pet stage.
 /// </summary>
 public partial class DesktopPetWindow : Window
 {
     public static DesktopPetWindow? Instance { get; private set; }
+
+    // Win32 global hotkey support.
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool RegisterHotKey(
+        IntPtr hWnd,
+        int id,
+        uint fsModifiers,
+        uint vk);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UnregisterHotKey(
+        IntPtr hWnd,
+        int id);
+
+    private const int HotKeyId = 9000;
+    private const int WmHotKey = 0x0312;
+
+    private const uint ModAlt = 0x0001;
+    private const uint ModControl = 0x0002;
+    private const uint ModifierCtrlAlt = ModControl | ModAlt;
+    private const uint KeyT = 0x54;
+
+    private IntPtr _windowHandle;
+    private HwndSource? _source;
+    private bool _hotkeyRegistered;
 
     private static readonly JsonSerializerOptions WebJsonOptions =
         new(JsonSerializerDefaults.Web);
@@ -62,6 +91,9 @@ public partial class DesktopPetWindow : Window
         PlaceNearPrimaryWorkArea();
 
         Loaded += InitializePetAsync;
+        Loaded += OnWindowLoaded;
+        Unloaded += OnWindowUnloaded;
+
         Closing += (_, _) =>
         {
             _isClosing = true;
@@ -96,6 +128,89 @@ public partial class DesktopPetWindow : Window
             $"Settings: mode={_settings.DisplayMode}, " +
             $"size={Width}x{Height}, " +
             $"roaming={_settings.RoamingEnabled}");
+    }
+
+    private void OnWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        if (_isClosing)
+            return;
+
+        _windowHandle = new WindowInteropHelper(this).Handle;
+
+        _source = HwndSource.FromHwnd(_windowHandle);
+        _source?.AddHook(HwndHook);
+
+        _hotkeyRegistered = RegisterHotKey(
+            _windowHandle,
+            HotKeyId,
+            ModifierCtrlAlt,
+            KeyT);
+
+        if (_hotkeyRegistered)
+        {
+            LogDiagnostic(
+                "Global hotkey registered: Ctrl + Alt + T.");
+        }
+        else
+        {
+            var error = Marshal.GetLastWin32Error();
+
+            LogDiagnostic(
+                $"Failed to register Ctrl + Alt + T. Win32 error: {error}. " +
+                "Another application may already be using this shortcut.");
+        }
+    }
+
+    private void OnWindowUnloaded(object sender, RoutedEventArgs e)
+    {
+        UnregisterGlobalHotkey();
+    }
+
+    private void UnregisterGlobalHotkey()
+    {
+        if (_hotkeyRegistered && _windowHandle != IntPtr.Zero)
+        {
+            if (UnregisterHotKey(_windowHandle, HotKeyId))
+            {
+                LogDiagnostic("Global hotkey unregistered.");
+            }
+            else
+            {
+                LogDiagnostic(
+                    $"Failed to unregister global hotkey. " +
+                    $"Win32 error: {Marshal.GetLastWin32Error()}.");
+            }
+
+            _hotkeyRegistered = false;
+        }
+
+        _source?.RemoveHook(HwndHook);
+        _source = null;
+        _windowHandle = IntPtr.Zero;
+    }
+
+    private IntPtr HwndHook(
+        IntPtr hwnd,
+        int msg,
+        IntPtr wParam,
+        IntPtr lParam,
+        ref bool handled)
+    {
+        if (msg == WmHotKey && wParam.ToInt32() == HotKeyId)
+        {
+            LogDiagnostic(
+                "Global hotkey pressed: Ctrl + Alt + T.");
+
+            // Forward the toolbar toggle command to React.
+            SendToWeb(new
+            {
+                type = "toggle-toolbar"
+            });
+
+            handled = true;
+        }
+
+        return IntPtr.Zero;
     }
 
     private async void InitializePetAsync(
@@ -161,7 +276,6 @@ public partial class DesktopPetWindow : Window
                 $"WebView2 initialized. Version: " +
                 core.Environment.BrowserVersionString);
 
-            // Capture JavaScript console messages.
             var consoleReceiver =
                 core.GetDevToolsProtocolEventReceiver(
                     "Runtime.consoleAPICalled");
@@ -171,7 +285,6 @@ public partial class DesktopPetWindow : Window
                 LogDiagnostic($"JS CONSOLE: {args.ParameterObjectAsJson}");
             };
 
-            // Capture uncaught JavaScript exceptions and stack traces.
             var exceptionReceiver =
                 core.GetDevToolsProtocolEventReceiver(
                     "Runtime.exceptionThrown");
@@ -187,7 +300,6 @@ public partial class DesktopPetWindow : Window
 
             LogDiagnostic("JavaScript diagnostics enabled.");
 
-            // Capture failed HTTP requests, including missing model files.
             core.WebResourceResponseReceived += (_, args) =>
             {
                 try
@@ -209,20 +321,17 @@ public partial class DesktopPetWindow : Window
                 }
             };
 
-            // Capture WebView2 renderer or browser process failures.
             core.ProcessFailed += (_, args) =>
             {
                 LogDiagnostic(
                     $"WEBVIEW PROCESS FAILED: {args.ProcessFailedKind}");
             };
 
-            // Serve the bundled React application through a local virtual host.
             core.SetVirtualHostNameToFolderMapping(
                 "fufuu.local",
                 webRoot,
                 CoreWebView2HostResourceAccessKind.Allow);
 
-            // Receive messages sent by the JavaScript pet stage.
             core.WebMessageReceived += (_, args) =>
             {
                 try
@@ -261,8 +370,7 @@ public partial class DesktopPetWindow : Window
                 }
             };
 
-            var target = new Uri(
-                "https://fufuu.local/PetStage.html");
+            var target = new Uri("https://fufuu.local/PetStage.html");
 
             LogDiagnostic($"Navigating to: {target}");
 
@@ -303,11 +411,8 @@ public partial class DesktopPetWindow : Window
                     LogDiagnostic("Pet stage reported ready.");
 
                     _webReady = true;
-
-                    // Send persisted settings after the JavaScript stage loads.
                     SendSettings();
 
-                    // Start mouse polling and roaming only after viewer initializes.
                     if (!_roamTimer.IsEnabled)
                         _roamTimer.Start();
 
@@ -327,6 +432,7 @@ public partial class DesktopPetWindow : Window
                     if (root.TryGetProperty("mode", out var modeElement))
                     {
                         var requestedMode = modeElement.GetString();
+
                         if (!string.IsNullOrEmpty(requestedMode))
                         {
                             LogDiagnostic($"Setting mode to: {requestedMode}");
@@ -341,10 +447,66 @@ public partial class DesktopPetWindow : Window
                     break;
 
                 case "update-settings":
-                    if (root.TryGetProperty("settings", out var settingsProp))
+                    if (root.TryGetProperty("settings", out _))
                     {
-                        LogDiagnostic("Updating stage settings from React toolbar.");
+                        LogDiagnostic(
+                            "Updating stage settings from React toolbar.");
                     }
+                    break;
+
+                // NEW: Open or focus the main chat window.
+                case "open-chat":
+                    LogDiagnostic("Open Chat requested from pet toolbar.");
+
+                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        try
+                        {
+                            var app = System.Windows.Application.Current;
+
+                            var mainWindow = app.Windows
+                                .OfType<MainWindow>()
+                                .FirstOrDefault();
+
+                            if (mainWindow is null)
+                            {
+                                mainWindow = new MainWindow();
+                                app.MainWindow = mainWindow;
+                                mainWindow.Show();
+                            }
+                            else
+                            {
+                                if (!mainWindow.IsVisible)
+                                {
+                                    mainWindow.Show();
+                                }
+
+                                if (mainWindow.WindowState == WindowState.Minimized)
+                                {
+                                    mainWindow.WindowState = WindowState.Normal;
+                                }
+
+                                mainWindow.Activate();
+                            }
+
+                            mainWindow.Activate();
+                            mainWindow.Focus();
+
+                            LogDiagnostic("Main chat window opened or focused.");
+                        }
+                        catch (Exception ex)
+                        {
+                            LogDiagnostic($"Failed to open chat window: {ex}");
+
+                            MessageBox.Show(
+                                this,
+                                "Fufuu couldn't open the chat window.\n\n" +
+                                ex.Message,
+                                "Fufuu",
+                                MessageBoxButton.OK,
+                                MessageBoxImage.Error);
+                        }
+                    });
                     break;
 
                 case "close":
@@ -355,10 +517,8 @@ public partial class DesktopPetWindow : Window
                 case "pet-click":
                     LogDiagnostic("Pet clicked.");
 
-                    // Optional short reaction speech on click
                     Speak("Yes?", 2500);
 
-                    // Cancel an earlier temporary reaction before starting another
                     _reactionTimer?.Stop();
                     _reactionTimer = null;
 
@@ -396,7 +556,8 @@ public partial class DesktopPetWindow : Window
                         _reactionTimer?.Stop();
                         _reactionTimer = null;
 
-                        if (_reactionToken == reactionToken && reactionToken.HasValue)
+                        if (_reactionToken == reactionToken &&
+                            reactionToken.HasValue)
                         {
                             _reactionToken = null;
                             _behavior.FinishTemporary(reactionToken.Value);
@@ -448,10 +609,7 @@ public partial class DesktopPetWindow : Window
     }
 
     /// <summary>
-    /// Sends a speech message to the React pet stage to display in a speech bubble.
-    /// </summary>
-    /// <summary>
-    /// Sends a speech message to the React pet stage to display in a speech bubble.
+    /// Sends a speech message to the React pet stage.
     /// </summary>
     public void Speak(string text, int durationMs = 4000)
     {
@@ -464,14 +622,16 @@ public partial class DesktopPetWindow : Window
     }
 
     /// <summary>
-    /// Splits a long response into natural sentences and displays them sequentially.
+    /// Splits a long response into sentences and displays them sequentially.
     /// </summary>
-    /// <summary>
-    /// Splits a long response into natural sentences and displays them sequentially.
-    /// </summary>
-    public void SpeakSequence(string fullText, int durationPerSentenceMs = 4500)
+    public void SpeakSequence(
+        string fullText,
+        int durationPerSentenceMs = 4500)
     {
-        var sentences = System.Text.RegularExpressions.Regex.Split(fullText, @"(?<=[.!?])\s+")
+        var sentences =
+            System.Text.RegularExpressions.Regex.Split(
+                fullText,
+                @"(?<=[.!?])\s+")
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToList();
 
@@ -481,16 +641,20 @@ public partial class DesktopPetWindow : Window
             return;
         }
 
-        _ = System.Threading.Tasks.Task.Run(async () =>
+        _ = Task.Run(async () =>
         {
             foreach (var sentence in sentences)
             {
-                System.Windows.Application.Current.Dispatcher.Invoke(() => Speak(sentence, durationPerSentenceMs));
-                await System.Threading.Tasks.Task.Delay(durationPerSentenceMs + 600);
+                if (_isClosing)
+                    break;
+
+                await System.Windows.Application.Current.Dispatcher.InvokeAsync(
+                    () => Speak(sentence, durationPerSentenceMs));
+
+                await Task.Delay(durationPerSentenceMs + 600);
             }
         });
     }
-
 
     private void SendToWeb(object payload)
     {
@@ -504,14 +668,11 @@ public partial class DesktopPetWindow : Window
             return;
         }
 
-        var json = JsonSerializer.Serialize(
-            payload,
-            WebJsonOptions);
+        var json = JsonSerializer.Serialize(payload, WebJsonOptions);
 
         try
         {
             PetWebView.CoreWebView2.PostWebMessageAsJson(json);
-
             LogDiagnostic($"Sent to pet stage: {json}");
         }
         catch (Exception ex)
@@ -590,10 +751,6 @@ public partial class DesktopPetWindow : Window
         }
     }
 
-    /// <summary>
-    /// Reads the global mouse position and sends coordinates relative
-    /// to the pet window, even when the cursor is outside that window.
-    /// </summary>
     private void PollGlobalMouse()
     {
         if (!IsVisible || PetWebView.CoreWebView2 is null)
@@ -603,7 +760,6 @@ public partial class DesktopPetWindow : Window
         {
             var screenPoint = System.Windows.Forms.Cursor.Position;
 
-            // Convert screen coordinates to pet-window-relative coordinates.
             double relX = screenPoint.X - Left;
             double relY = screenPoint.Y - Top;
 
@@ -689,6 +845,8 @@ public partial class DesktopPetWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        UnregisterGlobalHotkey();
+
         if (Instance == this)
             Instance = null;
 
@@ -728,7 +886,6 @@ public partial class DesktopPetWindow : Window
             ex is IOException or UnauthorizedAccessException)
         {
             LogDiagnostic($"Could not save settings: {ex.Message}");
-
             System.Diagnostics.Debug.WriteLine(ex);
         }
     }
@@ -737,8 +894,7 @@ public partial class DesktopPetWindow : Window
     {
         try
         {
-            var directory = Path.GetDirectoryName(
-                DiagnosticLogPath);
+            var directory = Path.GetDirectoryName(DiagnosticLogPath);
 
             if (!string.IsNullOrEmpty(directory))
                 Directory.CreateDirectory(directory);

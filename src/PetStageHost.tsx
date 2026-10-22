@@ -36,32 +36,64 @@ declare global {
     chrome?: {
       webview?: {
         postMessage: (message: string) => void;
-        addEventListener: (name: string, cb: (event: MessageEvent) => void) => void;
-        removeEventListener: (name: string, cb: (event: MessageEvent) => void) => void;
+        addEventListener: (
+          name: string,
+          cb: (event: MessageEvent) => void
+        ) => void;
+        removeEventListener: (
+          name: string,
+          cb: (event: MessageEvent) => void
+        ) => void;
       };
-    };
+    }
   }
 }
 
 export default function PetStageHost() {
   const [settings, setSettings] = useState<StageSettings>(defaults);
   const [status, setStatus] = useState("Loading Fufuu…");
-  
-  // VPet-style Toolbar States
+
+  // Toolbar visibility: hidden by default.
   const [toolbarOpen, setToolbarOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<ToolbarTab>("main");
-  
-  // Speech bubble state
+
+  // Speech bubble state.
   const [speechText, setSpeechText] = useState<string | null>(null);
 
-  const [personalityMode, setPersonalityMode] = useState<PersonalityMode>("balanced");
+  const [personalityMode, setPersonalityMode] =
+    useState<PersonalityMode>("balanced");
 
+  // Keyboard shortcut: Ctrl + Alt + T toggles the toolbar.
   useEffect(() => {
-    let bubbleTimeout: ReturnType<typeof setTimeout>;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.ctrlKey &&
+        event.altKey &&
+        event.key.toLowerCase() === "t"
+      ) {
+        event.preventDefault();
+        setToolbarOpen((previous) => !previous);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, []);
+
+  // Receive messages from the WPF/WebView2 host.
+  useEffect(() => {
+    let bubbleTimeout: ReturnType<typeof setTimeout> | undefined;
 
     const showSpeech = (text: string, durationMs = 4000) => {
       setSpeechText(text);
-      clearTimeout(bubbleTimeout);
+
+      if (bubbleTimeout !== undefined) {
+        clearTimeout(bubbleTimeout);
+      }
+
       bubbleTimeout = setTimeout(() => {
         setSpeechText(null);
       }, durationMs);
@@ -69,6 +101,7 @@ export default function PetStageHost() {
 
     const receive = (event: MessageEvent) => {
       let message: any = event.data;
+
       if (typeof message === "string") {
         try {
           message = JSON.parse(message);
@@ -76,28 +109,64 @@ export default function PetStageHost() {
           return;
         }
       }
-      if (!message || typeof message !== "object") return;
+
+      if (!message || typeof message !== "object") {
+        return;
+      }
 
       if (message.type === "settings" && message.settings) {
-        const next = { ...defaults, ...message.settings } as StageSettings;
+        const next = {
+          ...defaults,
+          ...message.settings,
+        } as StageSettings;
+
         setSettings(next);
       }
+
       if (message.type === "behavior") {
         setStatus(`Fufuu · ${String(message.behavior)}`);
       }
-      if (message.type === "play-motion" && typeof message.motionId === "string") {
+
+      if (
+        message.type === "play-motion" &&
+        typeof message.motionId === "string"
+      ) {
         window.dispatchEvent(
-          new CustomEvent("fufuu:play-motion", { detail: message.motionId })
+          new CustomEvent("fufuu:play-motion", {
+            detail: message.motionId,
+          })
         );
       }
-      if (message.type === "speak" && typeof message.text === "string") {
+
+      if (
+        message.type === "speak" &&
+        typeof message.text === "string"
+      ) {
         showSpeech(message.text, message.duration || 4000);
+      }
+
+      
+      // Handle global hotkey messages from the WPF host.
+      if (message.type === "toggle-toolbar") {
+        setToolbarOpen((previous) => !previous);
+        setActiveTab("main");
+      }
+
+      // Allow the WPF host to explicitly show or hide the toolbar.
+      if (message.type === "toolbar") {
+        if (typeof message.visible === "boolean") {
+          setToolbarOpen(message.visible);
+          if (message.visible) {
+            setActiveTab("main");
+          }
+        } else {
+          setToolbarOpen((previous) => !previous);
+          setActiveTab("main");
+        }
       }
     };
 
-    // Listen to C# WebView2 messages
     window.chrome?.webview?.addEventListener("message", receive);
-    // Also listen to standard window messages (great for console testing & fallback)
     window.addEventListener("message", receive);
 
     post("ready");
@@ -105,19 +174,30 @@ export default function PetStageHost() {
     return () => {
       window.chrome?.webview?.removeEventListener("message", receive);
       window.removeEventListener("message", receive);
-      clearTimeout(bubbleTimeout);
+
+      if (bubbleTimeout !== undefined) {
+        clearTimeout(bubbleTimeout);
+      }
     };
   }, []);
 
-  const geometryChanged = (_geometry: CharacterScreenGeometry | null) => {};
+  const geometryChanged = (
+    _geometry: CharacterScreenGeometry | null
+  ) => {};
 
   const clicked = (_geometry: CharacterScreenGeometry) => {
     post("pet-click");
+
+    // Single-click opens the toolbar, preserving your existing behavior.
     setToolbarOpen(true);
     setActiveTab("main");
   };
 
   const pointerInteractive = (_interactive: boolean) => {};
+
+  const toggleToolbar = () => {
+    setToolbarOpen((previous) => !previous);
+  };
 
   const characterSettings = {
     characterScale: settings.characterScale,
@@ -127,8 +207,15 @@ export default function PetStageHost() {
     walkingSpeed: settings.walkingSpeed,
   };
 
-  const updateSettingField = (field: keyof StageSettings, value: any) => {
-    const updated = { ...settings, [field]: value };
+  const updateSettingField = (
+    field: keyof StageSettings,
+    value: number | boolean | string
+  ) => {
+    const updated = {
+      ...settings,
+      [field]: value,
+    } as StageSettings;
+
     setSettings(updated);
     post("update-settings", { settings: updated });
   };
@@ -137,28 +224,39 @@ export default function PetStageHost() {
     <main
       className="pet-stage"
       aria-label="Fufuu desktop pet"
+      style={{ pointerEvents: "none", width: "100%", height: "100%", position: "relative" }}
+      onDoubleClick={(event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest("button, input, select, textarea, .fufuu-toolbar")
+        ) {
+          return;
+        }
+        toggleToolbar();
+      }}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget) {
-          setToolbarOpen(false);
-          if (event.button === 0) post("drag-start");
+        if (event.target === event.currentTarget && event.button === 0) {
+          post("drag-start");
         }
       }}
     >
-      <div className="pet-stage__status">{status}</div>
+      <div className="pet-stage__status" style={{ pointerEvents: "auto" }}>{status}</div>
 
-      {/* Speech Bubble Overlay */}
+      {/* Speech bubble overlay */}
       {speechText && (
-        <div className="speech-bubble-container">
-          <div className="speech-bubble">
-            {speechText}
-          </div>
+        <div className="speech-bubble-container" style={{ pointerEvents: "auto" }}>
+          <div className="speech-bubble">{speechText}</div>
         </div>
       )}
 
-      {/* VPet Context Menu */}
+      {/* Fufuu toolbar: hidden until opened */}
       {toolbarOpen && (
         <div
+          className="fufuu-toolbar"
+          onDoubleClick={(event) => event.stopPropagation()}
           style={{
+            pointerEvents: "auto", // <-- THIS IS WHAT MAKES IT CLICKABLE!
             position: "absolute",
             top: "18%",
             left: "50%",
@@ -193,6 +291,7 @@ export default function PetStageHost() {
             >
               FUFUU CONTROL
             </span>
+
             <button
               onClick={() => setToolbarOpen(false)}
               style={{
@@ -202,13 +301,21 @@ export default function PetStageHost() {
                 cursor: "pointer",
                 fontSize: "12px",
               }}
+              aria-label="Close toolbar"
+              title="Close toolbar"
             >
               ✕
             </button>
           </div>
 
           {activeTab === "main" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px",
+              }}
+            >
               <button
                 onClick={() =>
                   post("set-mode", {
@@ -217,48 +324,94 @@ export default function PetStageHost() {
                 }
                 style={menuBtnStyle()}
               >
-                Switch to {settings.displayMode === "2d" ? "3D (VRM)" : "2D (Live2D)"}
+                Switch to{" "}
+                {settings.displayMode === "2d"
+                  ? "3D (VRM)"
+                  : "2D (Live2D)"}
               </button>
-              <button onClick={() => setActiveTab("motions")} style={menuBtnStyle()}>
-                ✨ Animations & Motions
+
+              <button
+                onClick={() => post("open-chat")}
+                style={menuBtnStyle()}
+              >
+                💬 Open Chat
               </button>
-              <button onClick={() => setActiveTab("settings")} style={menuBtnStyle()}>
+
+              <button
+                onClick={() => setActiveTab("motions")}
+                style={menuBtnStyle()}
+              >
+                ✨ Animations &amp; Motions
+              </button>
+
+              <button
+                onClick={() => setActiveTab("settings")}
+                style={menuBtnStyle()}
+              >
                 ⚙️ Pet Preferences
               </button>
-              <button onClick={() => post("toggle-roam")} style={menuBtnStyle()}>
-                {settings.roamingEnabled ? "⏹ Stop Roaming" : "⇄ Start Roaming"}
+
+              <button
+                onClick={() => post("toggle-roam")}
+                style={menuBtnStyle()}
+              >
+                {settings.roamingEnabled
+                  ? "⏹ Stop Roaming"
+                  : "⇄ Start Roaming"}
               </button>
-              <button onClick={() => post("close")} style={{ ...menuBtnStyle(), color: "#ff6b6b" }}>
+
+              <button
+                onClick={() => post("close")}
+                style={{
+                  ...menuBtnStyle(),
+                  color: "#ff6b6b",
+                }}
+              >
                 ✕ Quit Pet
               </button>
             </div>
           )}
 
           {activeTab === "motions" && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                gap: "6px",
+              }}
+            >
               <button
                 onClick={() =>
                   window.dispatchEvent(
-                    new CustomEvent("fufuu:play-motion", { detail: "wave" })
+                    new CustomEvent("fufuu:play-motion", {
+                      detail: "wave",
+                    })
                   )
                 }
                 style={menuBtnStyle()}
               >
                 Wave 👋
               </button>
+
               <button
                 onClick={() =>
                   window.dispatchEvent(
-                    new CustomEvent("fufuu:play-motion", { detail: "idle" })
+                    new CustomEvent("fufuu:play-motion", {
+                      detail: "idle",
+                    })
                   )
                 }
                 style={menuBtnStyle()}
               >
                 Idle 🧘
               </button>
+
               <button
                 onClick={() => setActiveTab("main")}
-                style={{ ...menuBtnStyle(), background: "rgba(255,255,255,0.04)" }}
+                style={{
+                  ...menuBtnStyle(),
+                  background: "rgba(255,255,255,0.04)",
+                }}
               >
                 ← Back
               </button>
@@ -275,25 +428,50 @@ export default function PetStageHost() {
                 color: "#d8c4e0",
               }}
             >
-              <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <label
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
                 Scale: {settings.characterScale.toFixed(2)}x
+
                 <input
                   type="range"
                   min="0.5"
                   max="2.0"
                   step="0.05"
                   value={settings.characterScale}
-                  onChange={(e) =>
-                    updateSettingField("characterScale", parseFloat(e.target.value))
+                  onChange={(event) =>
+                    updateSettingField(
+                      "characterScale",
+                      parseFloat(event.target.value)
+                    )
                   }
-                  style={{ width: "90px", accentColor: "#8c4a7c" }}
+                  style={{
+                    width: "90px",
+                    accentColor: "#8c4a7c",
+                  }}
                 />
               </label>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
                 <span>Personality</span>
+
                 <select
                   value={personalityMode}
-                  onChange={(e) => setPersonalityMode(e.target.value as PersonalityMode)}
+                  onChange={(event) =>
+                    setPersonalityMode(
+                      event.target.value as PersonalityMode
+                    )
+                  }
                   style={{
                     background: "#2a1e36",
                     color: "#fff",
@@ -308,9 +486,14 @@ export default function PetStageHost() {
                   <option value="hyper">Hyper</option>
                 </select>
               </div>
+
               <button
                 onClick={() => setActiveTab("main")}
-                style={{ ...menuBtnStyle(), background: "rgba(255,255,255,0.04)", marginTop: "4px" }}
+                style={{
+                  ...menuBtnStyle(),
+                  background: "rgba(255,255,255,0.04)",
+                  marginTop: "4px",
+                }}
               >
                 ← Back
               </button>
@@ -319,6 +502,7 @@ export default function PetStageHost() {
         </div>
       )}
 
+      {/* Character renderer */}
       {settings.displayMode === "3d" ? (
         <VRMViewer
           roamingEnabled={settings.roamingEnabled}
