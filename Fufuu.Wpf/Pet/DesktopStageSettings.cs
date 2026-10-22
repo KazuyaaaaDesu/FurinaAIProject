@@ -8,8 +8,8 @@ namespace Fufuu.Wpf.Pet;
 public sealed record DesktopStageSettings
 {
     public string DisplayMode { get; init; } = "2d";
-    public double Width { get; init; } = 360;
-    public double Height { get; init; } = 520;
+    public double Width { get; init; } = 520;
+    public double Height { get; init; } = 680;
     public double CharacterScale { get; init; } = 1.0;
     public double CharacterX { get; init; }
     public double CharacterY { get; init; }

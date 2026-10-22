@@ -67,6 +67,15 @@ interface HostMouseMessage {
   y: number;
 }
 
+interface Live2DViewerProps {
+  characterScale?: number;
+  onPetClick: (geometry: CharacterScreenGeometry) => void;
+  onPointerInteractive: (interactive: boolean) => void;
+  onCharacterGeometryChange: (
+    geometry: CharacterScreenGeometry | null,
+  ) => void;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -148,20 +157,22 @@ function isHostMouseMessage(
 }
 
 export default function Live2DViewer({
+  characterScale = 1,
   onPetClick,
   onPointerInteractive,
   onCharacterGeometryChange,
-}: {
-  onPetClick: (geometry: CharacterScreenGeometry) => void;
-  onPointerInteractive: (interactive: boolean) => void;
-  onCharacterGeometryChange: (
-    geometry: CharacterScreenGeometry | null,
-  ) => void;
-}) {
+}: Live2DViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+
   const onPetClickRef = useRef(onPetClick);
   const onPointerInteractiveRef = useRef(onPointerInteractive);
   const onCharacterGeometryChangeRef = useRef(onCharacterGeometryChange);
+
+  // Keep the latest scale without recreating the PIXI application.
+  const characterScaleRef = useRef(characterScale);
+
+  // Allows a scale change to trigger model fitting immediately.
+  const fitModelRef = useRef<(() => void) | null>(null);
 
   const [status, setStatus] = useState("Loading Furina…");
   const [failed, setFailed] = useState(false);
@@ -177,6 +188,16 @@ export default function Live2DViewer({
   useEffect(() => {
     onCharacterGeometryChangeRef.current = onCharacterGeometryChange;
   }, [onCharacterGeometryChange]);
+
+  // Apply changes to characterScale without reloading the model.
+  useEffect(() => {
+    const nextScale = Number.isFinite(characterScale)
+      ? clamp(characterScale, 0.1, 3)
+      : 1;
+
+    characterScaleRef.current = nextScale;
+    fitModelRef.current?.();
+  }, [characterScale]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -232,6 +253,8 @@ export default function Live2DViewer({
       const height = Math.max(host.clientHeight, 1);
 
       app.renderer.resize(width, height);
+
+      // Reset to unit scale before measuring the model.
       model.scale.set(1);
 
       const bounds = model.getLocalBounds();
@@ -246,16 +269,21 @@ export default function Live2DViewer({
         return;
       }
 
-      const scale = Math.min(
+      // Preserve automatic fitting and multiply by the requested scale.
+      const fitScale = Math.min(
         (width * 0.94) / bounds.width,
         (height * 0.86) / bounds.height,
       );
 
-      model.scale.set(scale);
+      const finalScale = fitScale * characterScaleRef.current;
+
+      model.scale.set(finalScale);
       model.position.set(width / 2, height / 2 + height * 0.015);
       model.visible = true;
       model.renderable = true;
     }
+
+    fitModelRef.current = fitModel;
 
     function updatePointer(event: MouseEvent) {
       if (!model || model.destroyed) return;
@@ -292,8 +320,6 @@ export default function Live2DViewer({
     }
 
     // Receives global mouse coordinates forwarded by the WPF host.
-    // The WPF coordinates are relative to the pet window, so convert
-    // them into canvas-relative coordinates before calculating gaze.
     function handleHostMessage(event: Event) {
       if (disposed) return;
 
@@ -310,8 +336,8 @@ export default function Live2DViewer({
 
       if (!width || !height) return;
 
-      // WPF sends coordinates relative to the window.
-      // Subtract the canvas offset to get coordinates within the canvas.
+      // WPF coordinates are relative to the pet window.
+      // Convert them into canvas-relative coordinates.
       const localX = data.x - rect.left;
       const localY = data.y - rect.top;
 
@@ -460,7 +486,9 @@ export default function Live2DViewer({
         return;
       }
 
-      const settings = model.internalModel.settings as unknown as CubismSettings;
+      const settings =
+        model.internalModel.settings as unknown as CubismSettings;
+
       const expressions = getExpressions(settings);
       const expression = expressions[index];
 
@@ -538,9 +566,7 @@ export default function Live2DViewer({
 
     emotionChannel?.addEventListener("message", handleEmotionMessage);
 
-    // WebView2 exposes its host messaging API at window.chrome.webview.
-    // EventTarget keeps this compatible with TypeScript projects that
-    // don't include WebView2-specific browser type declarations.
+    // WebView2 host messaging API.
     const webViewMessageTarget = (
       window as Window & {
         chrome?: {
@@ -698,6 +724,7 @@ export default function Live2DViewer({
           canvasConnected: canvas.isConnected,
           stageChildren: app.stage.children.length,
           expressionShortcuts: "1–7",
+          characterScale: characterScaleRef.current,
         });
 
         if (pendingExpressionIndex !== null) {
@@ -724,6 +751,10 @@ export default function Live2DViewer({
       resizeObserver?.disconnect();
       resizeObserver = null;
 
+      if (fitModelRef.current === fitModel) {
+        fitModelRef.current = null;
+      }
+
       emotionChannel?.removeEventListener(
         "message",
         handleEmotionMessage,
@@ -731,7 +762,6 @@ export default function Live2DViewer({
 
       emotionChannel?.close();
 
-      // Remove the WebView2 host message listener during cleanup.
       webViewMessageTarget?.removeEventListener(
         "message",
         handleHostMessage,

@@ -1,3 +1,4 @@
+
 import { useEffect, useState } from "react";
 import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
@@ -28,7 +29,9 @@ const defaults: StageSettings = {
 type ToolbarTab = "main" | "motions" | "settings";
 
 function post(type: string, extra: Record<string, unknown> = {}) {
-  window.chrome?.webview?.postMessage(JSON.stringify({ type, ...extra }));
+  window.chrome?.webview?.postMessage(
+    JSON.stringify({ type, ...extra })
+  );
 }
 
 declare global {
@@ -45,7 +48,7 @@ declare global {
           cb: (event: MessageEvent) => void
         ) => void;
       };
-    }
+    };
   }
 }
 
@@ -100,7 +103,7 @@ export default function PetStageHost() {
     };
 
     const receive = (event: MessageEvent) => {
-      let message: any = event.data;
+      let message: unknown = event.data;
 
       if (typeof message === "string") {
         try {
@@ -114,49 +117,51 @@ export default function PetStageHost() {
         return;
       }
 
-      if (message.type === "settings" && message.settings) {
+      const data = message as Record<string, any>;
+
+      if (data.type === "settings" && data.settings) {
         const next = {
           ...defaults,
-          ...message.settings,
+          ...data.settings,
         } as StageSettings;
 
         setSettings(next);
       }
 
-      if (message.type === "behavior") {
-        setStatus(`Fufuu · ${String(message.behavior)}`);
+      if (data.type === "behavior") {
+        setStatus(`Fufuu · ${String(data.behavior)}`);
       }
 
       if (
-        message.type === "play-motion" &&
-        typeof message.motionId === "string"
+        data.type === "play-motion" &&
+        typeof data.motionId === "string"
       ) {
         window.dispatchEvent(
           new CustomEvent("fufuu:play-motion", {
-            detail: message.motionId,
+            detail: data.motionId,
           })
         );
       }
 
       if (
-        message.type === "speak" &&
-        typeof message.text === "string"
+        data.type === "speak" &&
+        typeof data.text === "string"
       ) {
-        showSpeech(message.text, message.duration || 4000);
+        showSpeech(data.text, data.duration || 4000);
       }
 
-      
       // Handle global hotkey messages from the WPF host.
-      if (message.type === "toggle-toolbar") {
+      if (data.type === "toggle-toolbar") {
         setToolbarOpen((previous) => !previous);
         setActiveTab("main");
       }
 
       // Allow the WPF host to explicitly show or hide the toolbar.
-      if (message.type === "toolbar") {
-        if (typeof message.visible === "boolean") {
-          setToolbarOpen(message.visible);
-          if (message.visible) {
+      if (data.type === "toolbar") {
+        if (typeof data.visible === "boolean") {
+          setToolbarOpen(data.visible);
+
+          if (data.visible) {
             setActiveTab("main");
           }
         } else {
@@ -188,7 +193,7 @@ export default function PetStageHost() {
   const clicked = (_geometry: CharacterScreenGeometry) => {
     post("pet-click");
 
-    // Single-click opens the toolbar, preserving your existing behavior.
+    // Single-click opens the toolbar.
     setToolbarOpen(true);
     setActiveTab("main");
   };
@@ -224,39 +229,59 @@ export default function PetStageHost() {
     <main
       className="pet-stage"
       aria-label="Fufuu desktop pet"
-      style={{ pointerEvents: "none", width: "100%", height: "100%", position: "relative" }}
+      style={{
+        pointerEvents: "none",
+        width: "100%",
+        height: "100%",
+        position: "relative",
+      }}
       onDoubleClick={(event) => {
         const target = event.target;
+
         if (
           target instanceof Element &&
-          target.closest("button, input, select, textarea, .fufuu-toolbar")
+          target.closest(
+            "button, input, select, textarea, .fufuu-toolbar"
+          )
         ) {
           return;
         }
+
         toggleToolbar();
       }}
       onPointerDown={(event) => {
-        if (event.target === event.currentTarget && event.button === 0) {
+        if (
+          event.target === event.currentTarget &&
+          event.button === 0
+        ) {
           post("drag-start");
         }
       }}
     >
-      <div className="pet-stage__status" style={{ pointerEvents: "auto" }}>{status}</div>
+      <div
+        className="pet-stage__status"
+        style={{ pointerEvents: "auto" }}
+      >
+        {status}
+      </div>
 
       {/* Speech bubble overlay */}
       {speechText && (
-        <div className="speech-bubble-container" style={{ pointerEvents: "auto" }}>
+        <div
+          className="speech-bubble-container"
+          style={{ pointerEvents: "auto" }}
+        >
           <div className="speech-bubble">{speechText}</div>
         </div>
       )}
 
-      {/* Fufuu toolbar: hidden until opened */}
+      {/* Fufuu toolbar */}
       {toolbarOpen && (
         <div
           className="fufuu-toolbar"
           onDoubleClick={(event) => event.stopPropagation()}
           style={{
-            pointerEvents: "auto", // <-- THIS IS WHAT MAKES IT CLICKABLE!
+            pointerEvents: "auto",
             position: "absolute",
             top: "18%",
             left: "50%",
@@ -325,9 +350,7 @@ export default function PetStageHost() {
                 style={menuBtnStyle()}
               >
                 Switch to{" "}
-                {settings.displayMode === "2d"
-                  ? "3D (VRM)"
-                  : "2D (Live2D)"}
+                {settings.displayMode === "2d" ? "3D (VRM)" : "2D (Live2D)"}
               </button>
 
               <button
@@ -515,6 +538,7 @@ export default function PetStageHost() {
         />
       ) : (
         <Live2DViewer
+          characterScale={settings.characterScale}
           onPetClick={clicked}
           onPointerInteractive={pointerInteractive}
           onCharacterGeometryChange={geometryChanged}
