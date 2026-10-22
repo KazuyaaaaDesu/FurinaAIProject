@@ -1,4 +1,3 @@
-
 using System;
 using System.IO;
 using System.Linq;
@@ -256,9 +255,6 @@ public partial class DesktopPetWindow : Window
                 else
                 {
                     LogDiagnostic("WebView navigation succeeded.");
-
-                    // Actual stage readiness is confirmed by its "ready"
-                    // web message, not merely successful navigation.
                 }
             };
 
@@ -308,8 +304,7 @@ public partial class DesktopPetWindow : Window
                     // Send persisted settings after the JavaScript stage loads.
                     SendSettings();
 
-                    // Start mouse polling and roaming only after the viewer
-                    // has initialized successfully.
+                    // Start mouse polling and roaming only after viewer initializes.
                     if (!_roamTimer.IsEnabled)
                         _roamTimer.Start();
 
@@ -323,7 +318,6 @@ public partial class DesktopPetWindow : Window
                             motionId = "walking"
                         });
                     }
-
                     break;
 
                 case "set-mode":
@@ -343,6 +337,13 @@ public partial class DesktopPetWindow : Window
                     Roam_Click(this, new RoutedEventArgs());
                     break;
 
+                case "update-settings":
+                    if (root.TryGetProperty("settings", out var settingsProp))
+                    {
+                        LogDiagnostic("Updating stage settings from React toolbar.");
+                    }
+                    break;
+
                 case "close":
                     LogDiagnostic("Close requested from web interface.");
                     Close();
@@ -351,8 +352,10 @@ public partial class DesktopPetWindow : Window
                 case "pet-click":
                     LogDiagnostic("Pet clicked.");
 
-                    // Cancel an earlier temporary reaction before starting
-                    // another one.
+                    // Optional short reaction speech on click
+                    Speak("Yes?", 2500);
+
+                    // Cancel an earlier temporary reaction before starting another
                     _reactionTimer?.Stop();
                     _reactionTimer = null;
 
@@ -390,7 +393,7 @@ public partial class DesktopPetWindow : Window
                         _reactionTimer?.Stop();
                         _reactionTimer = null;
 
-                        if (_reactionToken == reactionToken)
+                        if (_reactionToken == reactionToken && reactionToken.HasValue)
                         {
                             _reactionToken = null;
                             _behavior.FinishTemporary(reactionToken.Value);
@@ -398,7 +401,6 @@ public partial class DesktopPetWindow : Window
                     };
 
                     _reactionTimer.Start();
-
                     break;
 
                 case "drag-start":
@@ -410,7 +412,6 @@ public partial class DesktopPetWindow : Window
                     {
                         LogDiagnostic($"DragMove ignored: {ex.Message}");
                     }
-
                     break;
 
                 case "motion-finished":
@@ -425,7 +426,6 @@ public partial class DesktopPetWindow : Window
 
                         _behavior.FinishTemporary(value);
                     }
-
                     break;
 
                 default:
@@ -442,6 +442,19 @@ public partial class DesktopPetWindow : Window
         {
             LogDiagnostic($"Pet stage message processing error: {ex}");
         }
+    }
+
+    /// <summary>
+    /// Sends a speech message to the React pet stage to display in a speech bubble.
+    /// </name>
+    public void Speak(string text, int durationMs = 4000)
+    {
+        SendToWeb(new
+        {
+            type = "speak",
+            text,
+            duration = durationMs
+        });
     }
 
     private void SendToWeb(object payload)
@@ -658,8 +671,8 @@ public partial class DesktopPetWindow : Window
     }
 
     private void Window_KeyDown(
-    object sender,
-    System.Windows.Input.KeyEventArgs e)
+        object sender,
+        System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == System.Windows.Input.Key.Escape)
         {

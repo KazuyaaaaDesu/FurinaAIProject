@@ -2,3 +2,55 @@ html, body, #pet-stage-root { width:100%; height:100%; margin:0; overflow:hidden
 body { user-select:none; }
 .pet-stage { position:relative; width:100%; height:100%; overflow:hidden; background:transparent; }
 .pet-stage__status { position:absolute; z-index:50; left:10px; bottom:8px; max-width:65%; padding:4px 8px; border-radius:8px; background:rgba(20,14,28,.62); color:#f4e8fa; font:11px/1.3 "Segoe UI",sans-serif; pointer-events:none; opacity:.65; }
+
+/* Speech Bubble Styles */
+.speech-bubble-container {
+  position: absolute;
+  top: 10%;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 300;
+  pointer-events: none;
+  max-width: 80%;
+  animation: speechFadeIn 0.2s ease-out;
+}
+
+.speech-bubble {
+  background: rgba(23, 18, 32, 0.92);
+  color: #f4e8fa;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 12px;
+  padding: 8px 14px;
+  font-size: 12px;
+  font-family: 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(8px);
+  text-align: center;
+  position: relative;
+  word-break: break-word;
+}
+
+.speech-bubble::after {
+  content: '';
+  position: absolute;
+  bottom: -6px;
+  left: 50%;
+  transform: translateX(-50%) rotate(45deg);
+  width: 10px;
+  height: 10px;
+  background: rgba(23, 18, 32, 0.92);
+  border-right: 1px solid rgba(255, 255, 255, 0.2);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+@keyframes speechFadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
