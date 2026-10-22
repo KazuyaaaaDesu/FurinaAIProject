@@ -1,4 +1,4 @@
-﻿
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -176,15 +176,15 @@ public partial class MainWindow : Window
 
         if (_voiceEnabled)
         {
-            VoiceButton.Content = "◉   Voice: ON";
-            FooterStatus.Text = "Voice enabled · Piper Plus";
+            VoiceButton.Content = "?   Voice: ON";
+            FooterStatus.Text = "Voice enabled � Piper Plus";
         }
         else
         {
             Interlocked.Increment(ref _voiceRequestId);
             _voice.Stop();
 
-            VoiceButton.Content = "◉   Voice: OFF";
+            VoiceButton.Content = "?   Voice: OFF";
             FooterStatus.Text = "Voice disabled.";
         }
     }
@@ -201,7 +201,7 @@ public partial class MainWindow : Window
                 voiceId == Interlocked.Read(ref _voiceRequestId) &&
                 _voiceEnabled)
             {
-                FooterStatus.Text = "Voice ready · Piper Plus";
+                FooterStatus.Text = "Voice ready � Piper Plus";
             }
         }
         catch (Exception ex)
@@ -365,7 +365,7 @@ public partial class MainWindow : Window
                 await Http.GetAsync(OllamaTagsEndpoint);
 
             ConnectionStatus.Text = response.IsSuccessStatusCode
-                ? $"Ollama connected · {ModelName}"
+                ? $"Ollama connected � {ModelName}"
                 : "Ollama responded, but needs attention";
 
             ConnectionStatus.Foreground =
@@ -376,7 +376,7 @@ public partial class MainWindow : Window
         catch
         {
             ConnectionStatus.Text =
-                "Ollama offline · start Ollama to chat";
+                "Ollama offline � start Ollama to chat";
 
             ConnectionStatus.Foreground = Brushes.Salmon;
         }
@@ -465,7 +465,7 @@ public partial class MainWindow : Window
             _historyLoaded = true;
 
             FooterStatus.Text =
-                $"Loaded saved history · {savedMessages.Count} messages · " +
+                $"Loaded saved history � {savedMessages.Count} messages � " +
                 $"{_savedMemories.Count} memories";
         }
         catch (Exception ex)
@@ -580,7 +580,7 @@ public partial class MainWindow : Window
         _isCapturingScreen = true;
         CaptureScreenButton.IsEnabled = false;
 
-        FooterStatus.Text = "Capturing primary screen…";
+        FooterStatus.Text = "Capturing primary screen�";
 
         try
         {
@@ -596,7 +596,7 @@ public partial class MainWindow : Window
             _pendingScreenshotBase64 = screenshot;
 
             FooterStatus.Text =
-                "Screenshot ready · type a question and send it";
+                "Screenshot ready � type a question and send it";
         }
         catch (Exception ex)
         {
@@ -667,7 +667,7 @@ public partial class MainWindow : Window
         try
         {
             FooterStatus.Text =
-                "Starting Vision Mode · preparing screen capture…";
+                "Starting Vision Mode � preparing screen capture�";
 
             // Take a baseline image so the initial screen isn't immediately
             // reported as a new observation.
@@ -693,7 +693,7 @@ public partial class MainWindow : Window
             UpdateVisionButton();
 
             FooterStatus.Text =
-                "Vision Mode ON · local screen observations enabled";
+                "Vision Mode ON � local screen observations enabled";
         }
         catch (Exception ex)
         {
@@ -770,8 +770,8 @@ public partial class MainWindow : Window
 
         VisionModeButton.Content =
             _visionModeEnabled()
-                ? "◈   Vision Mode: ON"
-                : "◈   Vision Mode: OFF";
+                ? "?   Vision Mode: ON"
+                : "?   Vision Mode: OFF";
 
         VisionModeButton.IsEnabled = !_isVisionStarting;
     }
@@ -905,7 +905,6 @@ public partial class MainWindow : Window
 
                     _messages.Add(
                         new ChatMessage("assistant", remark));
-
                     AddMessageBubble(
                         "Fufuu",
                         remark,
@@ -916,7 +915,7 @@ public partial class MainWindow : Window
                         await SaveMessageAsync("assistant", remark);
 
                         FooterStatus.Text =
-                            "Vision Mode ON · observation added";
+                            "Vision Mode ON � observation added";
                     }
                     catch (Exception ex)
                     {
@@ -925,6 +924,10 @@ public partial class MainWindow : Window
                             ex.Message;
                     }
 
+                    // Show the observation in the floating pet's speech bubble.
+                    DesktopPetWindow.Instance?.SpeakSequence(remark, 5000);
+
+                    // Play the observation aloud only when Piper is enabled.
                     if (_voiceEnabled && !_isClosed)
                     {
                         var voiceId = Interlocked.Increment(
@@ -1103,8 +1106,8 @@ public partial class MainWindow : Window
         MessageInput.Clear();
 
         FooterStatus.Text = screenshot is null
-            ? "Fufuu is thinking…"
-            : "Fufuu is analyzing your screenshot…";
+            ? "Fufuu is thinking�"
+            : "Fufuu is analyzing your screenshot�";
 
         _messages.Add(new ChatMessage("user", text));
 
@@ -1126,7 +1129,7 @@ public partial class MainWindow : Window
 
             replyBlock = AddMessageBubble(
                 "Fufuu",
-                "…",
+                "�",
                 isUser: false);
 
             var recentMessages = _messages
@@ -1252,7 +1255,7 @@ public partial class MainWindow : Window
             if (finalReply.Length == 0)
             {
                 finalReply =
-                    "Hmm… I didn't get a reply that time. Try again?";
+                    "Hmm� I didn't get a reply that time. Try again?";
             }
 
             await SaveMessageAsync("assistant", finalReply);
@@ -1267,9 +1270,13 @@ public partial class MainWindow : Window
             }
 
             FooterStatus.Text = _activeConversationId is null
-                ? $"Temporary chat · {_savedMemories.Count} memories loaded"
-                : $"History saved · {_savedMemories.Count} memories loaded";
+                ? $"Temporary chat � {_savedMemories.Count} memories loaded"
+                : $"History saved � {_savedMemories.Count} memories loaded";
 
+            // Display Fufuu's reply in the floating desktop pet's speech bubble.
+            DesktopPetWindow.Instance?.SpeakSequence(finalReply, 5000);
+
+            // Play audio only when the Piper voice toggle is enabled.
             if (_voiceEnabled)
             {
                 var voiceId = Interlocked.Increment(
@@ -1326,7 +1333,7 @@ public partial class MainWindow : Window
 
         stack.Children.Add(new TextBlock
         {
-            Text = name + "  ·  " + DateTime.Now.ToString("HH:mm"),
+            Text = name + "  �  " + DateTime.Now.ToString("HH:mm"),
             Foreground = new SolidColorBrush(
                 (Color)ColorConverter.ConvertFromString(
                     isUser ? "#E7AFD9" : "#D7B9F0")),
@@ -1412,11 +1419,11 @@ public partial class MainWindow : Window
 
         AddMessageBubble(
             "Fufuu",
-            "Oh? You're here. What is it? ♡",
+            "Oh? You're here. What is it? ?",
             isUser: false);
 
         FooterStatus.Text =
-            $"New temporary chat · {_savedMemories.Count} memories loaded.";
+            $"New temporary chat � {_savedMemories.Count} memories loaded.";
 
         MessageInput.Focus();
     }

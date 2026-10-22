@@ -17,6 +17,8 @@ namespace Fufuu.Wpf.Pet;
 /// </summary>
 public partial class DesktopPetWindow : Window
 {
+    public static DesktopPetWindow? Instance { get; private set; }
+
     private static readonly JsonSerializerOptions WebJsonOptions =
         new(JsonSerializerDefaults.Web);
 
@@ -49,6 +51,7 @@ public partial class DesktopPetWindow : Window
     public DesktopPetWindow()
     {
         InitializeComponent();
+        Instance = this;
 
         _settings = DesktopStageSettings.Load(_settingsPath);
 
@@ -446,7 +449,10 @@ public partial class DesktopPetWindow : Window
 
     /// <summary>
     /// Sends a speech message to the React pet stage to display in a speech bubble.
-    /// </name>
+    /// </summary>
+    /// <summary>
+    /// Sends a speech message to the React pet stage to display in a speech bubble.
+    /// </summary>
     public void Speak(string text, int durationMs = 4000)
     {
         SendToWeb(new
@@ -456,6 +462,35 @@ public partial class DesktopPetWindow : Window
             duration = durationMs
         });
     }
+
+    /// <summary>
+    /// Splits a long response into natural sentences and displays them sequentially.
+    /// </summary>
+    /// <summary>
+    /// Splits a long response into natural sentences and displays them sequentially.
+    /// </summary>
+    public void SpeakSequence(string fullText, int durationPerSentenceMs = 4500)
+    {
+        var sentences = System.Text.RegularExpressions.Regex.Split(fullText, @"(?<=[.!?])\s+")
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToList();
+
+        if (sentences.Count == 0)
+        {
+            Speak(fullText, durationPerSentenceMs);
+            return;
+        }
+
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            foreach (var sentence in sentences)
+            {
+                System.Windows.Application.Current.Dispatcher.Invoke(() => Speak(sentence, durationPerSentenceMs));
+                await System.Threading.Tasks.Task.Delay(durationPerSentenceMs + 600);
+            }
+        });
+    }
+
 
     private void SendToWeb(object payload)
     {
@@ -654,6 +689,9 @@ public partial class DesktopPetWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        if (Instance == this)
+            Instance = null;
+
         _isClosing = true;
         _webReady = false;
 
