@@ -87,6 +87,10 @@
                                 Click="MinimizeButton_Click"
                                 Margin="0,0,6,0"/>
                         <Button Style="{StaticResource PillButton}"
+                                Content="♡   Desktop Pet"
+                                Click="DesktopPetButton_Click"
+                                Margin="0,0,6,7"/>
+                        <Button Style="{StaticResource PillButton}"
                                 Content="✦   Memories"
                                 HorizontalContentAlignment="Left"
                                 Click="MemoriesButton_Click"

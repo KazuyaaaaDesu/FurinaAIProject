@@ -15,7 +15,14 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Fufuu.Wpf.Services;
+using Fufuu.Wpf.Pet;
 using System.Windows.Interop;
+// Explicit WPF aliases avoid conflicts with WinForms/System.Drawing.
+using MessageBox = System.Windows.MessageBox;
+using Brushes = System.Windows.Media.Brushes;
+using Color = System.Windows.Media.Color;
+using ColorConverter = System.Windows.Media.ColorConverter;
+using HorizontalAlignment = System.Windows.HorizontalAlignment;
 
 namespace Fufuu.Wpf;
 
@@ -57,6 +64,7 @@ public partial class MainWindow : Window
     private readonly List<ChatMessage> _messages = new();
     private readonly string _systemPrompt;
     private readonly PiperVoiceService _voice = new();
+    private DesktopPetWindow? _desktopPetWindow;
 
     private string _activeSystemPrompt = string.Empty;
     private List<string> _savedMemories = new();
@@ -146,6 +154,14 @@ public partial class MainWindow : Window
         };
 
         MessageInput.Focus();
+    }
+
+    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            Close();
+        }
     }
 
     // ------------------------------------------------------------
@@ -1049,7 +1065,7 @@ public partial class MainWindow : Window
 
     private async void MessageInput_KeyDown(
         object sender,
-        KeyEventArgs e)
+        System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == Key.Enter &&
             Keyboard.Modifiers != ModifierKeys.Shift)
@@ -1403,6 +1419,29 @@ public partial class MainWindow : Window
             $"New temporary chat · {_savedMemories.Count} memories loaded.";
 
         MessageInput.Focus();
+    }
+
+    // ------------------------------------------------------------
+    // Desktop pet window
+    // ------------------------------------------------------------
+
+    private void DesktopPetButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_desktopPetWindow is null)
+        {
+            _desktopPetWindow = new DesktopPetWindow();
+            _desktopPetWindow.Closed += (_, _) => _desktopPetWindow = null;
+            _desktopPetWindow.Show();
+        }
+        else if (!_desktopPetWindow.IsVisible)
+        {
+            _desktopPetWindow.Show();
+            _desktopPetWindow.Activate();
+        }
+        else
+        {
+            _desktopPetWindow.Activate();
+        }
     }
 
     // ------------------------------------------------------------

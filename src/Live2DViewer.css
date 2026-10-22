@@ -9,7 +9,7 @@
   overflow: hidden;
   background: transparent !important;
   z-index: 1;
-  pointer-events: none;
+  pointer-events: auto !important;
 }
 
 /* Dedicated container owned by PixiJS for the Live2D canvas */

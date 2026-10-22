@@ -1,0 +1,4 @@
+html, body, #pet-stage-root { width:100%; height:100%; margin:0; overflow:hidden; background:transparent !important; }
+body { user-select:none; }
+.pet-stage { position:relative; width:100%; height:100%; overflow:hidden; background:transparent; }
+.pet-stage__status { position:absolute; z-index:50; left:10px; bottom:8px; max-width:65%; padding:4px 8px; border-radius:8px; background:rgba(20,14,28,.62); color:#f4e8fa; font:11px/1.3 "Segoe UI",sans-serif; pointer-events:none; opacity:.65; }

@@ -396,6 +396,39 @@ export default function VRMViewer({
       }
     };
 
+    const handleHostMessage = (event: MessageEvent) => {
+      let data: any = event.data;
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch {
+          return;
+        }
+      }
+      if (!data || data.type !== "mouse-move") return;
+      if (!vrm) return;
+
+      const width = renderer.domElement.clientWidth || renderer.domElement.width;
+      const height = renderer.domElement.clientHeight || renderer.domElement.height;
+      if (!width || !height) return;
+
+      // Convert global WPF window-relative coordinates to normalized device coordinates (-1 to +1)
+      pointer.set(
+        (data.x / width) * 2 - 1,
+        -((data.y / height) * 2 - 1),
+      );
+
+      raycaster.setFromCamera(pointer, camera);
+      const interactive =
+        raycaster.intersectObject(vrm.scene, true).length > 0;
+      if (interactive !== pointerRegionActive) {
+        pointerRegionActive = interactive;
+        onPointerInteractiveRef.current(interactive);
+      }
+    };
+
+    window.chrome?.webview?.addEventListener("message", handleHostMessage);
+
     const handleCanvasPointerDown = (event: PointerEvent) => {
       canvasPointerDown = { x: event.clientX, y: event.clientY };
       updateCanvasPointer(event);

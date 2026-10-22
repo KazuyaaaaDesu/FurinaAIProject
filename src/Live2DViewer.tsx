@@ -61,6 +61,12 @@ interface CubismParameterAPI {
   ) => void;
 }
 
+interface HostMouseMessage {
+  type: "mouse-move";
+  x: number;
+  y: number;
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
 }
@@ -125,6 +131,22 @@ function isFufuuEmotion(value: unknown): value is FufuuEmotion {
   );
 }
 
+function isHostMouseMessage(
+  value: unknown,
+): value is HostMouseMessage {
+  if (!value || typeof value !== "object") return false;
+
+  const data = value as Record<string, unknown>;
+
+  return (
+    data.type === "mouse-move" &&
+    typeof data.x === "number" &&
+    Number.isFinite(data.x) &&
+    typeof data.y === "number" &&
+    Number.isFinite(data.y)
+  );
+}
+
 export default function Live2DViewer({
   onPetClick,
   onPointerInteractive,
@@ -140,6 +162,7 @@ export default function Live2DViewer({
   const onPetClickRef = useRef(onPetClick);
   const onPointerInteractiveRef = useRef(onPointerInteractive);
   const onCharacterGeometryChangeRef = useRef(onCharacterGeometryChange);
+
   const [status, setStatus] = useState("Loading Furina…");
   const [failed, setFailed] = useState(false);
 
@@ -162,14 +185,18 @@ export default function Live2DViewer({
     let disposed = false;
     let model: Live2DModel | null = null;
     let animationTime = 0;
+
     let pointerTargetX = 0;
     let pointerTargetY = 0;
     let pointerX = 0;
     let pointerY = 0;
+
     let pointerDownAt: { x: number; y: number } | null = null;
     let pointerRegionActive: boolean | null = null;
+
     let pendingExpressionIndex: number | null = null;
     let lastExpressionIndex: number | null = null;
+
     let lastGeometryReportAt = 0;
     let lastGeometry: CharacterScreenGeometry | null = null;
 
@@ -187,6 +214,7 @@ export default function Live2DViewer({
     });
 
     const canvas = app.view as HTMLCanvasElement;
+
     canvas.style.width = "100%";
     canvas.style.height = "100%";
     canvas.style.display = "block";
@@ -247,10 +275,65 @@ export default function Live2DViewer({
         1,
       );
 
-      const x = ((event.clientX - rect.left) / rect.width) * app.screen.width;
-      const y = ((event.clientY - rect.top) / rect.height) * app.screen.height;
+      const x =
+        ((event.clientX - rect.left) / rect.width) * app.screen.width;
+
+      const y =
+        ((event.clientY - rect.top) / rect.height) * app.screen.height;
+
       const interactive =
-        model.hitTest(x, y).length > 0 || model.getBounds().contains(x, y);
+        model.hitTest(x, y).length > 0 ||
+        model.getBounds().contains(x, y);
+
+      if (interactive !== pointerRegionActive) {
+        pointerRegionActive = interactive;
+        onPointerInteractiveRef.current(interactive);
+      }
+    }
+
+    // Receives global mouse coordinates forwarded by the WPF host.
+    // The WPF coordinates are relative to the pet window, so convert
+    // them into canvas-relative coordinates before calculating gaze.
+    function handleHostMessage(event: Event) {
+      if (disposed) return;
+
+      const messageEvent = event as MessageEvent<unknown>;
+      const data = messageEvent.data;
+
+      if (!isHostMouseMessage(data)) return;
+      if (!model || model.destroyed) return;
+
+      const rect = canvas.getBoundingClientRect();
+
+      const width = rect.width;
+      const height = rect.height;
+
+      if (!width || !height) return;
+
+      // WPF sends coordinates relative to the window.
+      // Subtract the canvas offset to get coordinates within the canvas.
+      const localX = data.x - rect.left;
+      const localY = data.y - rect.top;
+
+      pointerTargetX = clamp(
+        (localX / width - 0.5) * 2,
+        -1,
+        1,
+      );
+
+      pointerTargetY = clamp(
+        (localY / height - 0.5) * 2,
+        -1,
+        1,
+      );
+
+      const x = (localX / width) * app.screen.width;
+      const y = (localY / height) * app.screen.height;
+
+      const interactive =
+        model.hitTest(x, y).length > 0 ||
+        model.getBounds().contains(x, y);
+
       if (interactive !== pointerRegionActive) {
         pointerRegionActive = interactive;
         onPointerInteractiveRef.current(interactive);
@@ -259,7 +342,9 @@ export default function Live2DViewer({
 
     function getCharacterGeometry(): CharacterScreenGeometry | null {
       if (!model || model.destroyed) return null;
+
       const rect = canvas.getBoundingClientRect();
+
       if (
         !rect.width ||
         !rect.height ||
@@ -268,28 +353,35 @@ export default function Live2DViewer({
       ) {
         return null;
       }
+
       const bounds = model.getBounds();
+
       const left = clamp(
         (bounds.x / app.screen.width) * rect.width,
         0,
         rect.width,
       );
+
       const top = clamp(
         (bounds.y / app.screen.height) * rect.height,
         0,
         rect.height,
       );
+
       const right = clamp(
         ((bounds.x + bounds.width) / app.screen.width) * rect.width,
         0,
         rect.width,
       );
+
       const bottom = clamp(
         ((bounds.y + bounds.height) / app.screen.height) * rect.height,
         0,
         rect.height,
       );
+
       if (right < left || bottom < top) return null;
+
       return {
         viewportWidth: rect.width,
         viewportHeight: rect.height,
@@ -306,33 +398,49 @@ export default function Live2DViewer({
       pointerTargetX = 0;
       pointerTargetY = 0;
       pointerRegionActive = false;
+
       onPointerInteractiveRef.current(false);
     }
 
     function rememberPointerDown(event: PointerEvent) {
-      pointerDownAt = { x: event.clientX, y: event.clientY };
+      pointerDownAt = {
+        x: event.clientX,
+        y: event.clientY,
+      };
     }
 
     function handleCanvasClick(event: MouseEvent) {
       if (!model || model.destroyed) return;
+
       if (pointerDownAt) {
         const distance = Math.hypot(
           event.clientX - pointerDownAt.x,
           event.clientY - pointerDownAt.y,
         );
+
         pointerDownAt = null;
+
         if (distance > 8) return;
       }
 
       const rect = canvas.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
 
-      const x = ((event.clientX - rect.left) / rect.width) * app.screen.width;
-      const y = ((event.clientY - rect.top) / rect.height) * app.screen.height;
-      if (model.hitTest(x, y).length > 0 || model.getBounds().contains(x, y)) {
+      const x =
+        ((event.clientX - rect.left) / rect.width) * app.screen.width;
+
+      const y =
+        ((event.clientY - rect.top) / rect.height) * app.screen.height;
+
+      if (
+        model.hitTest(x, y).length > 0 ||
+        model.getBounds().contains(x, y)
+      ) {
         pointerRegionActive = true;
         onPointerInteractiveRef.current(true);
+
         const geometry = getCharacterGeometry();
+
         if (geometry) {
           lastGeometry = geometry;
           onCharacterGeometryChangeRef.current(geometry);
@@ -357,7 +465,10 @@ export default function Live2DViewer({
       const expression = expressions[index];
 
       if (!expression) {
-        console.warn(`[Fufuu] No expression at index ${index}.`, settings);
+        console.warn(
+          `[Fufuu] No expression at index ${index}.`,
+          settings,
+        );
         return;
       }
 
@@ -370,6 +481,7 @@ export default function Live2DViewer({
           const byName = await model.expression(name);
 
           if (disposed) return;
+
           activated = Boolean(byName);
         }
 
@@ -377,16 +489,20 @@ export default function Live2DViewer({
           const byIndex = await model.expression(index);
 
           if (disposed) return;
+
           activated = Boolean(byIndex);
         }
 
         if (activated) {
           lastExpressionIndex = index;
+
           console.info(
             `[Fufuu] Expression activated: ${name ?? index}`,
           );
         } else {
-          console.warn(`[Fufuu] Could not activate expression ${index + 1}.`);
+          console.warn(
+            `[Fufuu] Could not activate expression ${index + 1}.`,
+          );
         }
       } catch (error) {
         if (!disposed) {
@@ -405,10 +521,8 @@ export default function Live2DViewer({
 
       console.info("[Fufuu] Received AI emotion:", event.data);
 
-      // Avoid repeatedly reloading the expression that's already active.
       if (index === lastExpressionIndex) return;
 
-      // Keep only the latest emotion if the model hasn't loaded yet.
       if (!model || model.destroyed) {
         pendingExpressionIndex = index;
         return;
@@ -423,6 +537,22 @@ export default function Live2DViewer({
         : null;
 
     emotionChannel?.addEventListener("message", handleEmotionMessage);
+
+    // WebView2 exposes its host messaging API at window.chrome.webview.
+    // EventTarget keeps this compatible with TypeScript projects that
+    // don't include WebView2-specific browser type declarations.
+    const webViewMessageTarget = (
+      window as Window & {
+        chrome?: {
+          webview?: EventTarget;
+        };
+      }
+    ).chrome?.webview;
+
+    webViewMessageTarget?.addEventListener(
+      "message",
+      handleHostMessage,
+    );
 
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target;
@@ -442,11 +572,13 @@ export default function Live2DViewer({
       void activateExpression(expressionIndex);
     }
 
-    canvas.addEventListener("pointermove", updatePointer);
-    canvas.addEventListener("mousemove", updatePointer);
+    window.addEventListener("pointermove", updatePointer);
+    window.addEventListener("mousemove", updatePointer);
+
     canvas.addEventListener("pointerdown", rememberPointerDown);
     canvas.addEventListener("pointerleave", releasePointer);
     canvas.addEventListener("click", handleCanvasClick);
+
     window.addEventListener("keydown", handleKeyDown);
 
     resizeObserver = new ResizeObserver(() => fitModel());
@@ -466,19 +598,24 @@ export default function Live2DViewer({
         }
 
         model = loadedModel;
+
         model.anchor.set(0.5, 0.5);
         app.stage.addChild(model);
 
         fitModel();
 
-        const settings = model.internalModel.settings as unknown as CubismSettings;
+        const settings =
+          model.internalModel.settings as unknown as CubismSettings;
+
         const expressions = getExpressions(settings);
 
         console.info("[Fufuu] Model loaded.");
         console.info("[Fufuu] Expressions found:", expressions);
 
         if (expressions.length === 0) {
-          console.error("[Fufuu] No expressions found in model settings.");
+          console.error(
+            "[Fufuu] No expressions found in model settings.",
+          );
         } else {
           expressions.forEach((expression, index) => {
             console.info(
@@ -489,16 +626,19 @@ export default function Live2DViewer({
           });
         }
 
-        const core = model.internalModel.coreModel as unknown as CubismParameterAPI;
+        const core =
+          model.internalModel.coreModel as unknown as CubismParameterAPI;
 
         tickerCallback = (delta: number) => {
           if (disposed || !model || model.destroyed) return;
 
           const dt = Math.min(delta / 60, 0.05);
+
           animationTime += dt;
           lastGeometryReportAt += dt * 1000;
 
           const trackingEase = 1 - Math.exp(-dt * 5);
+
           pointerX += (pointerTargetX - pointerX) * trackingEase;
           pointerY += (pointerTargetY - pointerY) * trackingEase;
 
@@ -525,9 +665,12 @@ export default function Live2DViewer({
 
           if (lastGeometryReportAt >= 33) {
             lastGeometryReportAt %= 33;
+
             const geometry = getCharacterGeometry();
+
             if (geometry) {
               const previous = lastGeometry;
+
               if (
                 !previous ||
                 Math.abs(previous.anchorX - geometry.anchorX) >= 0.75 ||
@@ -560,6 +703,7 @@ export default function Live2DViewer({
         if (pendingExpressionIndex !== null) {
           const pendingIndex = pendingExpressionIndex;
           pendingExpressionIndex = null;
+
           void activateExpression(pendingIndex);
         }
       } catch (error) {
@@ -580,14 +724,26 @@ export default function Live2DViewer({
       resizeObserver?.disconnect();
       resizeObserver = null;
 
-      emotionChannel?.removeEventListener("message", handleEmotionMessage);
+      emotionChannel?.removeEventListener(
+        "message",
+        handleEmotionMessage,
+      );
+
       emotionChannel?.close();
 
-      canvas.removeEventListener("pointermove", updatePointer);
-      canvas.removeEventListener("mousemove", updatePointer);
+      // Remove the WebView2 host message listener during cleanup.
+      webViewMessageTarget?.removeEventListener(
+        "message",
+        handleHostMessage,
+      );
+
+      window.removeEventListener("pointermove", updatePointer);
+      window.removeEventListener("mousemove", updatePointer);
+
       canvas.removeEventListener("pointerdown", rememberPointerDown);
       canvas.removeEventListener("pointerleave", releasePointer);
       canvas.removeEventListener("click", handleCanvasClick);
+
       window.removeEventListener("keydown", handleKeyDown);
 
       if (tickerCallback) {
@@ -600,8 +756,10 @@ export default function Live2DViewer({
       if (model) {
         onPointerInteractiveRef.current(false);
         onCharacterGeometryChangeRef.current(null);
+
         app.stage.removeChild(model);
         model.destroy();
+
         model = null;
       }
 
@@ -621,7 +779,10 @@ export default function Live2DViewer({
 
   return (
     <div className="fufuu-live2d-viewer">
-      <div ref={containerRef} className="fufuu-live2d-canvas-host" />
+      <div
+        ref={containerRef}
+        className="fufuu-live2d-canvas-host"
+      />
 
       {status && (
         <div
