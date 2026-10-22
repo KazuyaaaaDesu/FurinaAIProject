@@ -514,6 +514,27 @@ public partial class DesktopPetWindow : Window
                     Close();
                     break;
 
+                case "open-control-menu":
+                    Dispatcher.Invoke(() =>
+                    {
+                        // Check if control window is already open to avoid spamming multiple windows
+                        var existingWindow = System.Windows.Application.Current.Windows
+                            .OfType<FufuuControlWindow>()
+                            .FirstOrDefault();
+
+                        if (existingWindow == null)
+                        {
+                            var controlWindow = new FufuuControlWindow(this);
+                            controlWindow.Owner = this;
+                            controlWindow.Show();
+                        }
+                        else
+                        {
+                            existingWindow.Activate();
+                        }
+                    });
+                    break;
+
                 case "pet-click":
                     LogDiagnostic("Pet clicked.");
 
@@ -656,7 +677,7 @@ public partial class DesktopPetWindow : Window
         });
     }
 
-    private void SendToWeb(object payload)
+    public void SendToWeb(object payload)
     {
         if (!_webReady || PetWebView.CoreWebView2 is null)
         {
@@ -760,14 +781,11 @@ public partial class DesktopPetWindow : Window
         {
             var screenPoint = System.Windows.Forms.Cursor.Position;
 
-            double relX = screenPoint.X - Left;
-            double relY = screenPoint.Y - Top;
-
             SendToWeb(new
             {
                 type = "mouse-move",
-                x = relX,
-                y = relY
+                x = screenPoint.X,
+                y = screenPoint.Y
             });
         }
         catch (Exception ex)

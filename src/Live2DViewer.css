@@ -41,14 +41,17 @@
 .fufuu-live2d-status {
   position: absolute;
   z-index: 3;
-  left: 50%;
-  top: 50%;
+  left: 12px;
+  bottom: 12px;
   max-width: 90%;
+  background: rgba(23, 18, 32, 0.75);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(140, 74, 124, 0.3);
+  padding: 4px 10px;
+  border-radius: 8px;
   color: #fff4fb;
-  font: 12px "Segoe UI", sans-serif;
-  text-align: center;
-  text-shadow: 0 1px 6px #512445;
-  transform: translate(-50%, -50%);
+  font: 11px "Segoe UI", sans-serif;
+  text-align: left;
   pointer-events: none;
 }
 

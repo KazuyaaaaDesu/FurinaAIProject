@@ -1,5 +1,5 @@
 ﻿
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import * as PIXI from "pixi.js";
 import { Live2DModel } from "pixi-live2d-display/cubism4";
 import type { CharacterScreenGeometry } from "./desktopStage";
@@ -10,17 +10,26 @@ Live2DModel.registerTicker(PIXI.Ticker);
 const MODEL_URL = "/models/furina-live2d/Furina.model3.json";
 const EMOTION_CHANNEL = "fufuu-avatar-emotion";
 
-const EXPRESSION_KEYS: Record<string, number> = {
-  "1": 0,
-  "2": 1,
-  "3": 2,
-  "4": 3,
-  "5": 4,
-  "6": 5,
-  "7": 6,
+type FufuuEmotion =
+  | "neutral"
+  | "happy"
+  | "pout"
+  | "shy"
+  | "smug"
+  | "surprised"
+  | "sparkle";
+
+const EMOTION_INDEX: Record<FufuuEmotion, number> = {
+  neutral: 0,
+  happy: 1,
+  pout: 2,
+  shy: 3,
+  smug: 4,
+  surprised: 5,
+  sparkle: 6,
 };
 
-const EXPRESSION_EMOTIONS = [
+const INDEX_EMOTION: FufuuEmotion[] = [
   "neutral",
   "happy",
   "pout",
@@ -28,107 +37,42 @@ const EXPRESSION_EMOTIONS = [
   "smug",
   "surprised",
   "sparkle",
-] as const;
+];
 
-type FufuuEmotion = (typeof EXPRESSION_EMOTIONS)[number];
-
-interface ExpressionSetting {
-  Name?: string;
-  File?: string;
-  name?: string;
-  file?: string;
-}
-
-interface CubismSettings {
-  expressions?: ExpressionSetting[];
-  Expressions?: ExpressionSetting[];
-  FileReferences?: {
-    Expressions?: ExpressionSetting[];
-  };
-}
-
-interface CubismParameterAPI {
-  setParameterValueById?: (
-    id: string,
-    value: number,
-    weight?: number,
-  ) => void;
-  getParameterIndex?: (id: string) => number;
-  setParameterValueByIndex?: (
-    index: number,
-    value: number,
-    weight?: number,
-  ) => void;
-}
-
-interface HostMouseMessage {
-  type: "mouse-move";
-  x: number;
-  y: number;
-}
-
-interface Live2DViewerProps {
+type Live2DViewerProps = {
   characterScale?: number;
-  onPetClick: (geometry: CharacterScreenGeometry) => void;
-  onPointerInteractive: (interactive: boolean) => void;
-  onCharacterGeometryChange: (
+  onPetClick?: (geometry: CharacterScreenGeometry) => void;
+  onPointerInteractive?: (interactive: boolean) => void;
+  onCharacterGeometryChange?: (
     geometry: CharacterScreenGeometry | null,
   ) => void;
-}
+};
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
+type Live2DExpression = {
+  Name?: string;
+  name?: string;
+  File?: string;
+  file?: string;
+};
 
-function setParameter(
-  core: CubismParameterAPI,
-  id: string,
-  value: number,
-) {
-  try {
-    if (typeof core.setParameterValueById === "function") {
-      core.setParameterValueById(id, value);
-      return;
-    }
+function getExpressions(model: Live2DModel): Live2DExpression[] {
+  const settings = model.internalModel?.settings as
+    | { expressions?: Live2DExpression[] }
+    | undefined;
 
-    if (
-      typeof core.getParameterIndex === "function" &&
-      typeof core.setParameterValueByIndex === "function"
-    ) {
-      const index = core.getParameterIndex(id);
-
-      if (index >= 0) {
-        core.setParameterValueByIndex(index, value);
-      }
-    }
-  } catch (error) {
-    console.debug(`[Fufuu] Could not set parameter ${id}:`, error);
-  }
-}
-
-function getExpressions(settings: unknown): ExpressionSetting[] {
-  if (!settings || typeof settings !== "object") return [];
-
-  const value = settings as CubismSettings;
-
-  if (Array.isArray(value.expressions)) return value.expressions;
-  if (Array.isArray(value.Expressions)) return value.Expressions;
-
-  if (Array.isArray(value.FileReferences?.Expressions)) {
-    return value.FileReferences.Expressions;
-  }
-
-  return [];
+  return Array.isArray(settings?.expressions)
+    ? settings.expressions
+    : [];
 }
 
 function getExpressionName(
-  expression: ExpressionSetting,
+  expression: Live2DExpression,
 ): string | undefined {
   return expression.Name ?? expression.name;
 }
 
 function getExpressionFile(
-  expression: ExpressionSetting,
+  expression: Live2DExpression,
 ): string | undefined {
   return expression.File ?? expression.file;
 }
@@ -136,692 +80,624 @@ function getExpressionFile(
 function isFufuuEmotion(value: unknown): value is FufuuEmotion {
   return (
     typeof value === "string" &&
-    EXPRESSION_EMOTIONS.includes(value as FufuuEmotion)
+    Object.prototype.hasOwnProperty.call(
+      EMOTION_INDEX,
+      value.toLowerCase(),
+    )
   );
 }
 
-function isHostMouseMessage(
-  value: unknown,
-): value is HostMouseMessage {
-  if (!value || typeof value !== "object") return false;
+function isHostMouseMessage(data: unknown): boolean {
+  if (!data || typeof data !== "object") {
+    return false;
+  }
 
-  const data = value as Record<string, unknown>;
+  const message = data as Record<string, unknown>;
 
   return (
-    data.type === "mouse-move" &&
-    typeof data.x === "number" &&
-    Number.isFinite(data.x) &&
-    typeof data.y === "number" &&
-    Number.isFinite(data.y)
+    message.type === "host-mouse" ||
+    message.type === "mouse-position"
   );
 }
 
-export default function Live2DViewer({
+function setParameter(
+  model: Live2DModel,
+  parameterId: string,
+  value: number,
+  weight = 1,
+): void {
+  try {
+    const coreModel = model.internalModel?.coreModel as
+      | {
+          setParameterValueById?: (
+            id: string,
+            value: number,
+            weight?: number,
+          ) => void;
+        }
+      | undefined;
+
+    coreModel?.setParameterValueById?.(
+      parameterId,
+      value,
+      weight,
+    );
+  } catch {
+    // Some models do not expose every optional parameter.
+  }
+}
+
+function Live2DViewer({
   characterScale = 1,
   onPetClick,
   onPointerInteractive,
   onCharacterGeometryChange,
 }: Live2DViewerProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const canvasHostRef = useRef<HTMLDivElement | null>(null);
+  const disposedRef = useRef(false);
 
-  const onPetClickRef = useRef(onPetClick);
-  const onPointerInteractiveRef = useRef(onPointerInteractive);
-  const onCharacterGeometryChangeRef = useRef(onCharacterGeometryChange);
+  const activateExpressionRef = useRef<
+    ((index: number) => void) | null
+  >(null);
 
-  // Keep the latest scale without recreating the PIXI application.
   const characterScaleRef = useRef(characterScale);
-
-  // Allows a scale change to trigger model fitting immediately.
   const fitModelRef = useRef<(() => void) | null>(null);
 
-  const [status, setStatus] = useState("Loading Furina…");
-  const [failed, setFailed] = useState(false);
+  // Keep the newest callbacks without restarting the PIXI application.
+  const onPetClickRef = useRef(onPetClick);
+  const onPointerInteractiveRef = useRef(onPointerInteractive);
+  const onGeometryChangeRef = useRef(onCharacterGeometryChange);
+
+  onPetClickRef.current = onPetClick;
+  onPointerInteractiveRef.current = onPointerInteractive;
+  onGeometryChangeRef.current = onCharacterGeometryChange;
+
+  const [status, setStatus] = useState("Loading Live2D…");
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    onPetClickRef.current = onPetClick;
-  }, [onPetClick]);
-
-  useEffect(() => {
-    onPointerInteractiveRef.current = onPointerInteractive;
-  }, [onPointerInteractive]);
-
-  useEffect(() => {
-    onCharacterGeometryChangeRef.current = onCharacterGeometryChange;
-  }, [onCharacterGeometryChange]);
-
-  // Apply changes to characterScale without reloading the model.
-  useEffect(() => {
-    const nextScale = Number.isFinite(characterScale)
-      ? clamp(characterScale, 0.1, 3)
-      : 1;
-
-    characterScaleRef.current = nextScale;
+    characterScaleRef.current = characterScale;
     fitModelRef.current?.();
   }, [characterScale]);
 
+  // Receive expression requests from PetStageHost.
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const handleExpression = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+      let index: number | null = null;
 
-    let disposed = false;
+      if (typeof detail === "number" && Number.isInteger(detail)) {
+        index = detail;
+      } else if (isFufuuEmotion(detail)) {
+        index = EMOTION_INDEX[detail.toLowerCase() as FufuuEmotion];
+      }
+
+      if (
+        index === null ||
+        index < 0 ||
+        index >= INDEX_EMOTION.length
+      ) {
+        console.warn(
+          "[Fufuu Live2D] Invalid expression:",
+          detail,
+        );
+        return;
+      }
+
+      const activate = activateExpressionRef.current;
+
+      if (activate) {
+        activate(index);
+      } else {
+        console.debug(
+          "[Fufuu Live2D] Expression requested before model is ready:",
+          detail,
+        );
+      }
+    };
+
+    window.addEventListener("fufuu:set-expression", handleExpression);
+
+    return () => {
+      window.removeEventListener(
+        "fufuu:set-expression",
+        handleExpression,
+      );
+    };
+  }, []);
+
+  useEffect(() => {
+    const host = canvasHostRef.current;
+
+    if (!host) {
+      return;
+    }
+
+    let cancelled = false;
     let model: Live2DModel | null = null;
-    let animationTime = 0;
-
-    let pointerTargetX = 0;
-    let pointerTargetY = 0;
-    let pointerX = 0;
-    let pointerY = 0;
-
-    let pointerDownAt: { x: number; y: number } | null = null;
-    let pointerRegionActive: boolean | null = null;
-
-    let pendingExpressionIndex: number | null = null;
-    let lastExpressionIndex: number | null = null;
-
-    let lastGeometryReportAt = 0;
-    let lastGeometry: CharacterScreenGeometry | null = null;
-
+    let app: PIXI.Application | null = null;
     let resizeObserver: ResizeObserver | null = null;
-    let tickerCallback: ((delta: number) => void) | null = null;
+    let emotionChannel: BroadcastChannel | null = null;
+    let pendingExpressionIndex: number | null = null;
 
-    const app = new PIXI.Application({
-      width: Math.max(container.clientWidth, 1),
-      height: Math.max(container.clientHeight, 1),
-      backgroundAlpha: 0,
-      antialias: true,
-      autoStart: true,
-      resolution: Math.min(window.devicePixelRatio || 1, 2),
-      autoDensity: true,
-    });
+    let lastPointerX = 0;
+    let lastPointerY = 0;
+    let pointerInside = false;
+    let lastGeometryReport = 0;
 
-    const canvas = app.view as HTMLCanvasElement;
+    disposedRef.current = false;
 
-    canvas.style.width = "100%";
-    canvas.style.height = "100%";
-    canvas.style.display = "block";
-    canvas.style.background = "transparent";
-    canvas.style.touchAction = "none";
+    const reportGeometry = () => {
+      if (!model || !app || cancelled) {
+        return;
+      }
 
-    container.appendChild(canvas);
+      const now = performance.now();
 
-    function fitModel() {
-      const host = containerRef.current;
+      if (now - lastGeometryReport < 100) {
+        return;
+      }
 
-      if (disposed || !host || !model || model.destroyed) return;
+      lastGeometryReport = now;
 
-      const width = Math.max(host.clientWidth, 1);
-      const height = Math.max(host.clientHeight, 1);
+      const bounds = model.getBounds();
+      const rect = host.getBoundingClientRect();
+
+      // Preserve the geometry fields used by the existing desktop stage.
+      // Additional fields required by CharacterScreenGeometry should be
+      // populated here if its interface requires them.
+      const geometry = {
+        x: rect.left + bounds.x,
+        y: rect.top + bounds.y,
+        left: rect.left + bounds.x,
+        top: rect.top + bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        centerX: rect.left + bounds.x + bounds.width / 2,
+        centerY: rect.top + bounds.y + bounds.height / 2,
+      } as unknown as CharacterScreenGeometry;
+
+      onGeometryChangeRef.current?.(geometry);
+    };
+
+    const fitModel = () => {
+      if (!model || !app || cancelled) {
+        return;
+      }
+
+      const width = host.clientWidth;
+      const height = host.clientHeight;
+
+      if (width <= 0 || height <= 0) {
+        return;
+      }
 
       app.renderer.resize(width, height);
 
-      // Reset to unit scale before measuring the model.
       model.scale.set(1);
+      model.anchor.set(0.5, 0.5);
 
       const bounds = model.getLocalBounds();
 
-      if (
-        !Number.isFinite(bounds.width) ||
-        !Number.isFinite(bounds.height) ||
-        bounds.width <= 0 ||
-        bounds.height <= 0
-      ) {
-        console.warn("[Fufuu] Model bounds are not ready:", bounds);
+      if (bounds.width <= 0 || bounds.height <= 0) {
         return;
       }
 
-      // Preserve automatic fitting and multiply by the requested scale.
       const fitScale = Math.min(
         (width * 0.94) / bounds.width,
-        (height * 0.86) / bounds.height,
+        (height * 0.94) / bounds.height,
       );
 
-      const finalScale = fitScale * characterScaleRef.current;
+      const scale =
+        fitScale * Math.max(0.1, characterScaleRef.current);
 
-      model.scale.set(finalScale);
-      model.position.set(width / 2, height / 2 + height * 0.015);
-      model.visible = true;
-      model.renderable = true;
-    }
+      model.scale.set(scale);
+      model.position.set(width / 2, height / 2);
+
+      reportGeometry();
+    };
 
     fitModelRef.current = fitModel;
 
-    function updatePointer(event: MouseEvent) {
-      if (!model || model.destroyed) return;
-
-      const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-
-      pointerTargetX = clamp(
-        ((event.clientX - rect.left) / rect.width - 0.5) * 2,
-        -1,
-        1,
-      );
-
-      pointerTargetY = clamp(
-        ((event.clientY - rect.top) / rect.height - 0.5) * 2,
-        -1,
-        1,
-      );
-
-      const x =
-        ((event.clientX - rect.left) / rect.width) * app.screen.width;
-
-      const y =
-        ((event.clientY - rect.top) / rect.height) * app.screen.height;
-
-      const interactive =
-        model.hitTest(x, y).length > 0 ||
-        model.getBounds().contains(x, y);
-
-      if (interactive !== pointerRegionActive) {
-        pointerRegionActive = interactive;
-        onPointerInteractiveRef.current(interactive);
-      }
-    }
-
-    // Receives global mouse coordinates forwarded by the WPF host.
-    function handleHostMessage(event: Event) {
-      if (disposed) return;
-
-      const messageEvent = event as MessageEvent<unknown>;
-      const data = messageEvent.data;
-
-      if (!isHostMouseMessage(data)) return;
-      if (!model || model.destroyed) return;
-
-      const rect = canvas.getBoundingClientRect();
-
-      const width = rect.width;
-      const height = rect.height;
-
-      if (!width || !height) return;
-
-      // WPF coordinates are relative to the pet window.
-      // Convert them into canvas-relative coordinates.
-      const localX = data.x - rect.left;
-      const localY = data.y - rect.top;
-
-      pointerTargetX = clamp(
-        (localX / width - 0.5) * 2,
-        -1,
-        1,
-      );
-
-      pointerTargetY = clamp(
-        (localY / height - 0.5) * 2,
-        -1,
-        1,
-      );
-
-      const x = (localX / width) * app.screen.width;
-      const y = (localY / height) * app.screen.height;
-
-      const interactive =
-        model.hitTest(x, y).length > 0 ||
-        model.getBounds().contains(x, y);
-
-      if (interactive !== pointerRegionActive) {
-        pointerRegionActive = interactive;
-        onPointerInteractiveRef.current(interactive);
-      }
-    }
-
-    function getCharacterGeometry(): CharacterScreenGeometry | null {
-      if (!model || model.destroyed) return null;
-
-      const rect = canvas.getBoundingClientRect();
-
-      if (
-        !rect.width ||
-        !rect.height ||
-        !app.screen.width ||
-        !app.screen.height
-      ) {
-        return null;
-      }
-
-      const bounds = model.getBounds();
-
-      const left = clamp(
-        (bounds.x / app.screen.width) * rect.width,
-        0,
-        rect.width,
-      );
-
-      const top = clamp(
-        (bounds.y / app.screen.height) * rect.height,
-        0,
-        rect.height,
-      );
-
-      const right = clamp(
-        ((bounds.x + bounds.width) / app.screen.width) * rect.width,
-        0,
-        rect.width,
-      );
-
-      const bottom = clamp(
-        ((bounds.y + bounds.height) / app.screen.height) * rect.height,
-        0,
-        rect.height,
-      );
-
-      if (right < left || bottom < top) return null;
-
-      return {
-        viewportWidth: rect.width,
-        viewportHeight: rect.height,
-        left,
-        top,
-        right,
-        bottom,
-        anchorX: right,
-        anchorY: bottom,
-      };
-    }
-
-    function releasePointer() {
-      pointerTargetX = 0;
-      pointerTargetY = 0;
-      pointerRegionActive = false;
-
-      onPointerInteractiveRef.current(false);
-    }
-
-    function rememberPointerDown(event: PointerEvent) {
-      pointerDownAt = {
-        x: event.clientX,
-        y: event.clientY,
-      };
-    }
-
-    function handleCanvasClick(event: MouseEvent) {
-      if (!model || model.destroyed) return;
-
-      if (pointerDownAt) {
-        const distance = Math.hypot(
-          event.clientX - pointerDownAt.x,
-          event.clientY - pointerDownAt.y,
-        );
-
-        pointerDownAt = null;
-
-        if (distance > 8) return;
-      }
-
-      const rect = canvas.getBoundingClientRect();
-      if (!rect.width || !rect.height) return;
-
-      const x =
-        ((event.clientX - rect.left) / rect.width) * app.screen.width;
-
-      const y =
-        ((event.clientY - rect.top) / rect.height) * app.screen.height;
-
-      if (
-        model.hitTest(x, y).length > 0 ||
-        model.getBounds().contains(x, y)
-      ) {
-        pointerRegionActive = true;
-        onPointerInteractiveRef.current(true);
-
-        const geometry = getCharacterGeometry();
-
-        if (geometry) {
-          lastGeometry = geometry;
-          onCharacterGeometryChangeRef.current(geometry);
-          onPetClickRef.current(geometry);
-        }
-      }
-    }
-
-    async function activateExpression(index: number) {
-      if (
-        !model ||
-        disposed ||
-        model.destroyed ||
-        index < 0 ||
-        index >= EXPRESSION_EMOTIONS.length
-      ) {
-        return;
-      }
-
-      const settings =
-        model.internalModel.settings as unknown as CubismSettings;
-
-      const expressions = getExpressions(settings);
-      const expression = expressions[index];
-
-      if (!expression) {
-        console.warn(
-          `[Fufuu] No expression at index ${index}.`,
-          settings,
-        );
-        return;
-      }
-
-      const name = getExpressionName(expression);
-
-      try {
-        let activated = false;
-
-        if (name) {
-          const byName = await model.expression(name);
-
-          if (disposed) return;
-
-          activated = Boolean(byName);
-        }
-
-        if (!activated) {
-          const byIndex = await model.expression(index);
-
-          if (disposed) return;
-
-          activated = Boolean(byIndex);
-        }
-
-        if (activated) {
-          lastExpressionIndex = index;
-
-          console.info(
-            `[Fufuu] Expression activated: ${name ?? index}`,
-          );
-        } else {
-          console.warn(
-            `[Fufuu] Could not activate expression ${index + 1}.`,
-          );
-        }
-      } catch (error) {
-        if (!disposed) {
-          console.error(
-            `[Fufuu] Error activating expression ${index + 1}:`,
-            error,
-          );
-        }
-      }
-    }
-
-    function handleEmotionMessage(event: MessageEvent<unknown>) {
-      if (disposed || !isFufuuEmotion(event.data)) return;
-
-      const index = EXPRESSION_EMOTIONS.indexOf(event.data);
-
-      console.info("[Fufuu] Received AI emotion:", event.data);
-
-      if (index === lastExpressionIndex) return;
-
-      if (!model || model.destroyed) {
+    const activateExpression = (index: number) => {
+      if (!model || cancelled || disposedRef.current) {
         pendingExpressionIndex = index;
         return;
       }
 
-      void activateExpression(index);
-    }
+      const expressions = getExpressions(model);
 
-    const emotionChannel =
-      typeof BroadcastChannel !== "undefined"
-        ? new BroadcastChannel(EMOTION_CHANNEL)
-        : null;
-
-    emotionChannel?.addEventListener("message", handleEmotionMessage);
-
-    // WebView2 host messaging API.
-    const webViewMessageTarget = (
-      window as Window & {
-        chrome?: {
-          webview?: EventTarget;
-        };
+      if (expressions.length === 0) {
+        console.warn(
+          "[Fufuu Live2D] This model has no configured expressions.",
+        );
+        return;
       }
-    ).chrome?.webview;
 
-    webViewMessageTarget?.addEventListener(
-      "message",
-      handleHostMessage,
-    );
+      const expression = expressions[index];
 
-    function handleKeyDown(event: KeyboardEvent) {
-      const target = event.target;
+      if (!expression) {
+        console.warn(
+          `[Fufuu Live2D] Expression index ${index} does not exist. ` +
+            `Model contains ${expressions.length} expressions.`,
+        );
+        return;
+      }
 
+      const expressionName = getExpressionName(expression);
+      const expressionFile = getExpressionFile(expression);
+
+      try {
+        if (expressionName) {
+          void model.expression(expressionName);
+        } else {
+          void model.expression(index);
+        }
+
+        console.info(
+          "[Fufuu Live2D] Expression activated:",
+          expressionName ?? expressionFile ?? index,
+        );
+      } catch (expressionError) {
+        console.error(
+          "[Fufuu Live2D] Failed to activate expression:",
+          expressionError,
+        );
+      }
+    };
+
+    activateExpressionRef.current = activateExpression;
+
+    const playMotion = (motionId: string) => {
+      if (!model || cancelled || disposedRef.current) {
+        return;
+      }
+
+      try {
+        switch (motionId.toLowerCase()) {
+          case "idle":
+            void model.motion("Idle");
+            break;
+
+          case "wave":
+            void model.motion("Tap");
+            break;
+
+          default:
+            void model.motion(motionId);
+            break;
+        }
+      } catch (motionError) {
+        console.warn(
+          "[Fufuu Live2D] Could not play motion:",
+          motionId,
+          motionError,
+        );
+      }
+    };
+
+    const handleMotionEvent = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail;
+
+      if (typeof detail === "string") {
+        playMotion(detail);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
       if (
-        target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
+        event.target instanceof HTMLElement &&
+        ["INPUT", "TEXTAREA", "SELECT"].includes(
+          event.target.tagName,
+        )
       ) {
         return;
       }
 
-      const expressionIndex = EXPRESSION_KEYS[event.key];
+      if (event.key >= "1" && event.key <= "7") {
+        activateExpression(Number(event.key) - 1);
+      }
+    };
 
-      if (expressionIndex === undefined) return;
+    const handlePointerMove = (event: PointerEvent) => {
+      const rect = host.getBoundingClientRect();
 
-      void activateExpression(expressionIndex);
-    }
+      if (rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
 
-    window.addEventListener("pointermove", updatePointer);
-    window.addEventListener("mousemove", updatePointer);
+      lastPointerX = (event.clientX - rect.left) / rect.width;
+      lastPointerY = (event.clientY - rect.top) / rect.height;
 
-    canvas.addEventListener("pointerdown", rememberPointerDown);
-    canvas.addEventListener("pointerleave", releasePointer);
-    canvas.addEventListener("click", handleCanvasClick);
+      pointerInside =
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom;
 
-    window.addEventListener("keydown", handleKeyDown);
+      onPointerInteractiveRef.current?.(pointerInside);
+    };
 
-    resizeObserver = new ResizeObserver(() => fitModel());
-    resizeObserver.observe(container);
+    const handlePointerLeave = () => {
+      pointerInside = false;
+      onPointerInteractiveRef.current?.(false);
+    };
 
-    async function loadModel() {
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!model || !app || cancelled) {
+        return;
+      }
+
+      const rect = host.getBoundingClientRect();
+      const localX = event.clientX - rect.left;
+      const localY = event.clientY - rect.top;
+      const bounds = model.getBounds();
+
+      const hit =
+        localX >= bounds.x &&
+        localX <= bounds.x + bounds.width &&
+        localY >= bounds.y &&
+        localY <= bounds.y + bounds.height;
+
+      if (!hit) {
+        return;
+      }
+
+      const geometry = {
+        x: rect.left + bounds.x,
+        y: rect.top + bounds.y,
+        left: rect.left + bounds.x,
+        top: rect.top + bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        centerX: rect.left + bounds.x + bounds.width / 2,
+        centerY: rect.top + bounds.y + bounds.height / 2,
+      } as unknown as CharacterScreenGeometry;
+
+      onPetClickRef.current?.(geometry);
+      playMotion("Tap");
+    };
+
+    const handleHostMessage = (event: MessageEvent) => {
+      let data: unknown = event.data;
+
+      if (typeof data === "string") {
+        try {
+          data = JSON.parse(data);
+        } catch {
+          return;
+        }
+      }
+
+      if (!isHostMouseMessage(data)) {
+        return;
+      }
+
+      const message = data as Record<string, unknown>;
+
+      if (
+        typeof message.x === "number" &&
+        typeof message.y === "number"
+      ) {
+        lastPointerX = message.x;
+        lastPointerY = message.y;
+        pointerInside = true;
+      }
+    };
+
+    const handleEmotionBroadcast = (event: MessageEvent) => {
+      const data = event.data as
+        | string
+        | { emotion?: unknown; mood?: unknown }
+        | undefined;
+
+      let emotion: unknown = data;
+
+      if (data && typeof data === "object") {
+        emotion = data.emotion ?? data.mood;
+      }
+
+      if (isFufuuEmotion(emotion)) {
+        activateExpression(
+          EMOTION_INDEX[emotion.toLowerCase() as FufuuEmotion],
+        );
+      }
+    };
+
+    const loadModel = async () => {
       try {
-        console.info("[Fufuu] Loading model:", MODEL_URL);
+        setStatus("Loading Furina model…");
+        setError(null);
 
-        const loadedModel = await Live2DModel.from(MODEL_URL, {
+        app = new PIXI.Application({
+          width: Math.max(1, host.clientWidth),
+          height: Math.max(1, host.clientHeight),
+          backgroundAlpha: 0,
+          antialias: true,
+          autoDensity: true,
+          resolution: Math.max(1, window.devicePixelRatio || 1),
+          autoStart: true,
+        });
+
+        // PIXI creates and owns the canvas.
+        host.replaceChildren(app.view as HTMLCanvasElement);
+
+        model = await Live2DModel.from(MODEL_URL, {
           autoInteract: false,
         });
 
-        if (disposed) {
-          loadedModel.destroy();
+        if (cancelled || disposedRef.current) {
+          model.destroy();
+          model = null;
           return;
         }
 
-        model = loadedModel;
+        app.stage.addChild(model);
 
         model.anchor.set(0.5, 0.5);
-        app.stage.addChild(model);
+        model.interactive = true;
+        model.cursor = "pointer";
 
         fitModel();
 
-        const settings =
-          model.internalModel.settings as unknown as CubismSettings;
-
-        const expressions = getExpressions(settings);
-
-        console.info("[Fufuu] Model loaded.");
-        console.info("[Fufuu] Expressions found:", expressions);
-
-        if (expressions.length === 0) {
-          console.error(
-            "[Fufuu] No expressions found in model settings.",
-          );
-        } else {
-          expressions.forEach((expression, index) => {
-            console.info(
-              `[Fufuu] Expression ${index + 1}:`,
-              getExpressionName(expression),
-              getExpressionFile(expression),
-            );
-          });
-        }
-
-        const core =
-          model.internalModel.coreModel as unknown as CubismParameterAPI;
-
-        tickerCallback = (delta: number) => {
-          if (disposed || !model || model.destroyed) return;
-
-          const dt = Math.min(delta / 60, 0.05);
-
-          animationTime += dt;
-          lastGeometryReportAt += dt * 1000;
-
-          const trackingEase = 1 - Math.exp(-dt * 5);
-
-          pointerX += (pointerTargetX - pointerX) * trackingEase;
-          pointerY += (pointerTargetY - pointerY) * trackingEase;
-
-          const rect = canvas.getBoundingClientRect();
-
-          if (rect.width > 0 && rect.height > 0) {
-            model.focus(
-              rect.left + rect.width * (0.5 + pointerX * 0.35),
-              rect.top + rect.height * (0.5 + pointerY * 0.25),
-            );
+        app.ticker.add(() => {
+          if (!model || cancelled || disposedRef.current) {
+            return;
           }
 
-          setParameter(
-            core,
-            "ParamBreath",
-            0.5 + Math.sin(animationTime * 1.15) * 0.1,
-          );
+          if (pointerInside) {
+            const x = (lastPointerX - 0.5) * 2;
+            const y = (lastPointerY - 0.5) * 2;
 
-          setParameter(
-            core,
-            "ParamBodyAngleZ",
-            Math.sin(animationTime * 0.42),
-          );
-
-          if (lastGeometryReportAt >= 33) {
-            lastGeometryReportAt %= 33;
-
-            const geometry = getCharacterGeometry();
-
-            if (geometry) {
-              const previous = lastGeometry;
-
-              if (
-                !previous ||
-                Math.abs(previous.anchorX - geometry.anchorX) >= 0.75 ||
-                Math.abs(previous.anchorY - geometry.anchorY) >= 0.75 ||
-                Math.abs(previous.left - geometry.left) >= 0.75 ||
-                Math.abs(previous.top - geometry.top) >= 0.75 ||
-                Math.abs(previous.right - geometry.right) >= 0.75 ||
-                Math.abs(previous.bottom - geometry.bottom) >= 0.75 ||
-                previous.viewportWidth !== geometry.viewportWidth ||
-                previous.viewportHeight !== geometry.viewportHeight
-              ) {
-                lastGeometry = geometry;
-                onCharacterGeometryChangeRef.current(geometry);
-              }
-            }
+            setParameter(model, "ParamAngleX", x * 25);
+            setParameter(model, "ParamAngleY", y * -15);
+            setParameter(model, "ParamBodyAngleX", x * 8);
+            setParameter(model, "ParamEyeBallX", x);
+            setParameter(model, "ParamEyeBallY", -y);
+          } else {
+            setParameter(model, "ParamAngleX", 0, 0.05);
+            setParameter(model, "ParamAngleY", 0, 0.05);
+            setParameter(model, "ParamBodyAngleX", 0, 0.05);
+            setParameter(model, "ParamEyeBallX", 0, 0.05);
+            setParameter(model, "ParamEyeBallY", 0, 0.05);
           }
-        };
-
-        app.ticker.add(tickerCallback);
-
-        setFailed(false);
-        setStatus("");
-
-        console.info("[Fufuu] Furina is ready.", {
-          canvasConnected: canvas.isConnected,
-          stageChildren: app.stage.children.length,
-          expressionShortcuts: "1–7",
-          characterScale: characterScaleRef.current,
         });
 
+        resizeObserver = new ResizeObserver(() => {
+          fitModel();
+        });
+
+        resizeObserver.observe(host);
+
+        window.addEventListener("pointermove", handlePointerMove);
+        window.addEventListener("pointerleave", handlePointerLeave);
+        window.addEventListener("pointerdown", handlePointerDown);
+        window.addEventListener("keydown", handleKeyDown);
+        window.addEventListener("message", handleHostMessage);
+        window.addEventListener(
+          "fufuu:play-motion",
+          handleMotionEvent,
+        );
+
+        try {
+          emotionChannel = new BroadcastChannel(EMOTION_CHANNEL);
+          emotionChannel.addEventListener(
+            "message",
+            handleEmotionBroadcast,
+          );
+        } catch {
+          emotionChannel = null;
+        }
+
+        setStatus("Fufuu is ready");
+        window.setTimeout(() => {
+          if (!cancelled) {
+            setStatus("");
+          }
+        }, 1500);
+
         if (pendingExpressionIndex !== null) {
-          const pendingIndex = pendingExpressionIndex;
+          const pending = pendingExpressionIndex;
           pendingExpressionIndex = null;
-
-          void activateExpression(pendingIndex);
+          activateExpression(pending);
         }
-      } catch (error) {
-        console.error("[Fufuu] Model loading failed:", error);
 
-        if (!disposed) {
-          setFailed(true);
-          setStatus("Couldn't load Furina. Check the console.");
+        reportGeometry();
+      } catch (loadError) {
+        if (cancelled) {
+          return;
         }
+
+        console.error(
+          "[Fufuu Live2D] Model loading failed:",
+          loadError,
+        );
+
+        setStatus("Live2D failed to load");
+        setError(
+          loadError instanceof Error
+            ? loadError.message
+            : String(loadError),
+        );
       }
-    }
+    };
 
     void loadModel();
 
     return () => {
-      disposed = true;
+      cancelled = true;
+      disposedRef.current = true;
+
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerleave", handlePointerLeave);
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("message", handleHostMessage);
+      window.removeEventListener(
+        "fufuu:play-motion",
+        handleMotionEvent,
+      );
 
       resizeObserver?.disconnect();
-      resizeObserver = null;
-
-      if (fitModelRef.current === fitModel) {
-        fitModelRef.current = null;
-      }
 
       emotionChannel?.removeEventListener(
         "message",
-        handleEmotionMessage,
+        handleEmotionBroadcast,
       );
-
       emotionChannel?.close();
 
-      webViewMessageTarget?.removeEventListener(
-        "message",
-        handleHostMessage,
-      );
-
-      window.removeEventListener("pointermove", updatePointer);
-      window.removeEventListener("mousemove", updatePointer);
-
-      canvas.removeEventListener("pointerdown", rememberPointerDown);
-      canvas.removeEventListener("pointerleave", releasePointer);
-      canvas.removeEventListener("click", handleCanvasClick);
-
-      window.removeEventListener("keydown", handleKeyDown);
-
-      if (tickerCallback) {
-        app.ticker.remove(tickerCallback);
-        tickerCallback = null;
-      }
-
-      app.ticker.stop();
+      activateExpressionRef.current = null;
+      fitModelRef.current = null;
 
       if (model) {
-        onPointerInteractiveRef.current(false);
-        onCharacterGeometryChangeRef.current(null);
-
-        app.stage.removeChild(model);
-        model.destroy();
-
-        model = null;
+        try {
+          model.destroy();
+        } catch (destroyError) {
+          console.warn(
+            "[Fufuu Live2D] Model cleanup warning:",
+            destroyError,
+          );
+        }
       }
 
-      app.destroy(true, {
-        children: true,
-        texture: false,
-        baseTexture: false,
-      });
-
-      if (canvas.parentElement === container) {
-        container.removeChild(canvas);
+      if (app) {
+        try {
+          app.destroy(true);
+        } catch (destroyError) {
+          console.warn(
+            "[Fufuu Live2D] PIXI cleanup warning:",
+            destroyError,
+          );
+        }
       }
 
-      console.info("[Fufuu] Live2D viewer cleaned up.");
+      host.replaceChildren();
+
+      onGeometryChangeRef.current?.(null);
+      onPointerInteractiveRef.current?.(false);
     };
   }, []);
 
   return (
     <div className="fufuu-live2d-viewer">
       <div
-        ref={containerRef}
+        ref={canvasHostRef}
         className="fufuu-live2d-canvas-host"
       />
 
       {status && (
-        <div
-          className={`fufuu-live2d-status${failed ? " is-error" : ""}`}
-          role={failed ? "alert" : "status"}
-        >
+        <div className="fufuu-live2d-status">
           {status}
+        </div>
+      )}
+
+      {error && (
+        <div className="fufuu-live2d-error" role="alert">
+          {error}
         </div>
       )}
     </div>
   );
 }
+
+export default memo(Live2DViewer);
