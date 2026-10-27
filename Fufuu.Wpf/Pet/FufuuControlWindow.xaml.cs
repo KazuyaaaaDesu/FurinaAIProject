@@ -1,3 +1,4 @@
+using System.Linq;
 using System.Windows;
 
 namespace Fufuu.Wpf.Pet;
@@ -24,7 +25,23 @@ public partial class FufuuControlWindow : Window
 
     private void OnPreferencesClicked(object sender, RoutedEventArgs e)
     {
-        _petWindow.SendToWeb(new { type = "open-preferences" });
+        // Check if the preferences window is already open to avoid spamming multiple windows
+        var existingWindow = System.Windows.Application.Current.Windows
+            .OfType<PetPreferencesWindow>()
+            .FirstOrDefault();
+
+        if (existingWindow == null)
+        {
+            var preferencesWindow = new PetPreferencesWindow(_petWindow)
+            {
+                Owner = this,
+            };
+            preferencesWindow.Show();
+        }
+        else
+        {
+            existingWindow.Activate();
+        }
     }
 
     private void OnQuitClicked(object sender, RoutedEventArgs e)

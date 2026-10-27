@@ -1,11 +1,12 @@
-export {};
+﻿export {};
 
 declare global {
   interface Window {
     sakuraDesktop?: {
       onOpenMemories?: (callback: () => void) => (() => void) | void;
-      setDisplayMode?: (mode: "2d" | "3d") => void;
-      onDisplayMode?: (callback: (mode: "2d" | "3d") => void) => (() => void) | void;
+      onOpenPreferences?: (callback: () => void) => (() => void) | void;
+      setDisplayMode?: (mode: "2d" | "sprite") => void;
+      onDisplayMode?: (callback: (mode: "2d" | "sprite") => void) => (() => void) | void;
       speakText?: (
         text: string,
         options?: { language?: string; rate?: number }

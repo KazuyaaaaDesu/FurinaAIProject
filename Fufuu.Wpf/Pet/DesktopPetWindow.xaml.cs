@@ -1,5 +1,4 @@
-﻿
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
@@ -17,24 +16,18 @@ namespace Fufuu.Wpf.Pet;
 /// <summary>
 /// Transparent WPF shell for the React/PIXI Live2D and Three.js VRM viewers.
 /// Handles WebView2 diagnostics, global hotkeys, mouse tracking, roaming,
-/// settings, and communication with the JavaScript pet stage.
+/// window positioning, settings, and communication with the JavaScript pet stage.
 /// </summary>
 public partial class DesktopPetWindow : Window
 {
     public static DesktopPetWindow? Instance { get; private set; }
 
-    // Win32 global hotkey support.
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool RegisterHotKey(
-        IntPtr hWnd,
-        int id,
-        uint fsModifiers,
-        uint vk);
+        IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
     [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool UnregisterHotKey(
-        IntPtr hWnd,
-        int id);
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private const int HotKeyId = 9000;
     private const int WmHotKey = 0x0312;
@@ -71,11 +64,18 @@ public partial class DesktopPetWindow : Window
     private long? _reactionToken;
     private DispatcherTimer? _reactionTimer;
 
-    // Approximately 60 updates per second.
     private readonly DispatcherTimer _roamTimer =
         new() { Interval = TimeSpan.FromMilliseconds(16) };
 
     private int _roamDirection = -1;
+
+    // Reference position used by the X/Y settings.
+    private double _baseLeft;
+    private double _baseTop;
+    private bool _basePositionInitialized;
+
+    // Prevents programmatic movement from being treated as a user reposition.
+    private bool _applyingWindowPosition;
 
     public DesktopPetWindow()
     {
@@ -84,11 +84,17 @@ public partial class DesktopPetWindow : Window
 
         _settings = DesktopStageSettings.Load(_settingsPath);
 
-        Width = _settings.Width;
-        Height = _settings.Height;
+        Width = _settings.Width * _settings.CharacterScale;
+        Height = _settings.Height * _settings.CharacterScale;
         Topmost = _settings.AlwaysOnTop;
 
         PlaceNearPrimaryWorkArea();
+
+        _baseLeft = Left;
+        _baseTop = Top;
+        _basePositionInitialized = true;
+
+        ApplyWindowPosition();
 
         Loaded += InitializePetAsync;
         Loaded += OnWindowLoaded;
@@ -112,7 +118,6 @@ public partial class DesktopPetWindow : Window
             });
         };
 
-        // Update roaming and global mouse position on every timer tick.
         _roamTimer.Tick += (_, _) =>
         {
             if (_isClosing || !IsVisible)
@@ -123,10 +128,10 @@ public partial class DesktopPetWindow : Window
         };
 
         LogDiagnostic("DesktopPetWindow constructed.");
-
         LogDiagnostic(
             $"Settings: mode={_settings.DisplayMode}, " +
             $"size={Width}x{Height}, " +
+            $"X={_settings.CharacterX}, Y={_settings.CharacterY}, " +
             $"roaming={_settings.RoamingEnabled}");
     }
 
@@ -136,27 +141,21 @@ public partial class DesktopPetWindow : Window
             return;
 
         _windowHandle = new WindowInteropHelper(this).Handle;
-
         _source = HwndSource.FromHwnd(_windowHandle);
         _source?.AddHook(HwndHook);
 
         _hotkeyRegistered = RegisterHotKey(
-            _windowHandle,
-            HotKeyId,
-            ModifierCtrlAlt,
-            KeyT);
+            _windowHandle, HotKeyId, ModifierCtrlAlt, KeyT);
 
         if (_hotkeyRegistered)
         {
-            LogDiagnostic(
-                "Global hotkey registered: Ctrl + Alt + T.");
+            LogDiagnostic("Global hotkey registered: Ctrl + Alt + T.");
         }
         else
         {
-            var error = Marshal.GetLastWin32Error();
-
             LogDiagnostic(
-                $"Failed to register Ctrl + Alt + T. Win32 error: {error}. " +
+                $"Failed to register Ctrl + Alt + T. " +
+                $"Win32 error: {Marshal.GetLastWin32Error()}. " +
                 "Another application may already be using this shortcut.");
         }
     }
@@ -171,15 +170,11 @@ public partial class DesktopPetWindow : Window
         if (_hotkeyRegistered && _windowHandle != IntPtr.Zero)
         {
             if (UnregisterHotKey(_windowHandle, HotKeyId))
-            {
                 LogDiagnostic("Global hotkey unregistered.");
-            }
             else
-            {
                 LogDiagnostic(
                     $"Failed to unregister global hotkey. " +
                     $"Win32 error: {Marshal.GetLastWin32Error()}.");
-            }
 
             _hotkeyRegistered = false;
         }
@@ -198,24 +193,15 @@ public partial class DesktopPetWindow : Window
     {
         if (msg == WmHotKey && wParam.ToInt32() == HotKeyId)
         {
-            LogDiagnostic(
-                "Global hotkey pressed: Ctrl + Alt + T.");
-
-            // Forward the toolbar toggle command to React.
-            SendToWeb(new
-            {
-                type = "toggle-toolbar"
-            });
-
+            LogDiagnostic("Global hotkey pressed: Ctrl + Alt + T.");
+            SendToWeb(new { type = "toggle-toolbar" });
             handled = true;
         }
 
         return IntPtr.Zero;
     }
 
-    private async void InitializePetAsync(
-        object? sender,
-        RoutedEventArgs e)
+    private async void InitializePetAsync(object? sender, RoutedEventArgs e)
     {
         if (_initializationStarted)
             return;
@@ -224,17 +210,10 @@ public partial class DesktopPetWindow : Window
 
         try
         {
-            var webRoot = Path.Combine(
-                AppContext.BaseDirectory,
-                "Web");
+            var webRoot = Path.Combine(AppContext.BaseDirectory, "Web");
+            var entry = Path.Combine(webRoot, "PetStage.html");
 
-            var entry = Path.Combine(
-                webRoot,
-                "PetStage.html");
-
-            LogDiagnostic(
-                $"Application base directory: {AppContext.BaseDirectory}");
-
+            LogDiagnostic($"Application base directory: {AppContext.BaseDirectory}");
             LogDiagnostic($"Web root: {webRoot}");
             LogDiagnostic($"Pet stage entry: {entry}");
             LogDiagnostic($"Pet stage exists: {File.Exists(entry)}");
@@ -249,11 +228,8 @@ public partial class DesktopPetWindow : Window
                 LogDiagnostic(message);
 
                 MessageBox.Show(
-                    this,
-                    message,
-                    "Lumi Desktop Pet",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                    this, message, "Lumi Desktop Pet",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
 
                 Close();
                 return;
@@ -261,49 +237,39 @@ public partial class DesktopPetWindow : Window
 
             await PetWebView.EnsureCoreWebView2Async();
 
-            var webFolder = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Web");
+            if (_isClosing)
+                return;
+
+            var webFolder = Path.Combine(
+                AppDomain.CurrentDomain.BaseDirectory, "Web");
+
             PetWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
                 "lumi.local",
                 webFolder,
-                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
-            );
-
-            if (_isClosing)
-                return;
+                CoreWebView2HostResourceAccessKind.Allow);
 
             var core = PetWebView.CoreWebView2;
 
             if (core is null)
-            {
                 throw new InvalidOperationException(
                     "WebView2 initialized without a CoreWebView2 instance.");
-            }
 
             LogDiagnostic(
-                $"WebView2 initialized. Version: " +
-                core.Environment.BrowserVersionString);
+                $"WebView2 initialized. Version: {core.Environment.BrowserVersionString}");
 
             var consoleReceiver =
-                core.GetDevToolsProtocolEventReceiver(
-                    "Runtime.consoleAPICalled");
+                core.GetDevToolsProtocolEventReceiver("Runtime.consoleAPICalled");
 
             consoleReceiver.DevToolsProtocolEventReceived += (_, args) =>
-            {
                 LogDiagnostic($"JS CONSOLE: {args.ParameterObjectAsJson}");
-            };
 
             var exceptionReceiver =
-                core.GetDevToolsProtocolEventReceiver(
-                    "Runtime.exceptionThrown");
+                core.GetDevToolsProtocolEventReceiver("Runtime.exceptionThrown");
 
             exceptionReceiver.DevToolsProtocolEventReceived += (_, args) =>
-            {
                 LogDiagnostic($"JS EXCEPTION: {args.ParameterObjectAsJson}");
-            };
 
-            await core.CallDevToolsProtocolMethodAsync(
-                "Runtime.enable",
-                "{}");
+            await core.CallDevToolsProtocolMethodAsync("Runtime.enable", "{}");
 
             LogDiagnostic("JavaScript diagnostics enabled.");
 
@@ -313,35 +279,27 @@ public partial class DesktopPetWindow : Window
                 {
                     var response = args.Response;
 
-                    if (response is not null &&
-                        response.StatusCode >= 400)
+                    if (response is not null && response.StatusCode >= 400)
                     {
                         LogDiagnostic(
-                            $"HTTP {response.StatusCode}: " +
-                            $"{args.Request.Uri}");
+                            $"HTTP {response.StatusCode}: {args.Request.Uri}");
                     }
                 }
                 catch (Exception ex)
                 {
-                    LogDiagnostic(
-                        $"Resource diagnostic error: {ex.Message}");
+                    LogDiagnostic($"Resource diagnostic error: {ex.Message}");
                 }
             };
 
             core.ProcessFailed += (_, args) =>
-            {
-                LogDiagnostic(
-                    $"WEBVIEW PROCESS FAILED: {args.ProcessFailedKind}");
-            };
+                LogDiagnostic($"WEBVIEW PROCESS FAILED: {args.ProcessFailedKind}");
 
             core.WebMessageReceived += (_, args) =>
             {
                 try
                 {
                     var message = args.TryGetWebMessageAsString();
-
                     LogDiagnostic($"Web message received: {message}");
-
                     HandleWebMessage(message);
                 }
                 catch (Exception ex)
@@ -351,9 +309,7 @@ public partial class DesktopPetWindow : Window
             };
 
             core.NavigationStarting += (_, args) =>
-            {
                 LogDiagnostic($"Navigation starting: {args.Uri}");
-            };
 
             core.NavigationCompleted += (_, args) =>
             {
@@ -361,21 +317,13 @@ public partial class DesktopPetWindow : Window
                     $"Navigation completed: success={args.IsSuccess}, " +
                     $"error={args.WebErrorStatus}, URL={PetWebView.Source}");
 
-                if (!args.IsSuccess)
-                {
-                    LogDiagnostic(
-                        "WebView navigation failed. Check the diagnostic log.");
-                }
-                else
-                {
-                    LogDiagnostic("WebView navigation succeeded.");
-                }
+                LogDiagnostic(args.IsSuccess
+                    ? "WebView navigation succeeded."
+                    : "WebView navigation failed. Check the diagnostic log.");
             };
 
             var target = new Uri("https://lumi.local/PetStage.html");
-
             LogDiagnostic($"Navigating to: {target}");
-
             PetWebView.Source = target;
         }
         catch (Exception ex)
@@ -385,8 +333,7 @@ public partial class DesktopPetWindow : Window
             MessageBox.Show(
                 this,
                 "Couldn't initialize the Lumi character surface:\n" +
-                ex.Message +
-                "\n\nDiagnostic log:\n" + DiagnosticLogPath,
+                ex.Message + "\n\nDiagnostic log:\n" + DiagnosticLogPath,
                 "Lumi Desktop Pet",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
@@ -405,13 +352,10 @@ public partial class DesktopPetWindow : Window
             if (!root.TryGetProperty("type", out var typeElement))
                 return;
 
-            var messageType = typeElement.GetString();
-
-            switch (messageType)
+            switch (typeElement.GetString())
             {
                 case "ready":
                     LogDiagnostic("Pet stage reported ready.");
-
                     _webReady = true;
                     SendSettings();
 
@@ -421,12 +365,7 @@ public partial class DesktopPetWindow : Window
                     if (_settings.RoamingEnabled)
                     {
                         _behavior.SetBase(PetBehavior.Walking);
-
-                        SendToWeb(new
-                        {
-                            type = "play-motion",
-                            motionId = "walking"
-                        });
+                        SendToWeb(new { type = "play-motion", motionId = "walking" });
                     }
                     break;
 
@@ -449,14 +388,9 @@ public partial class DesktopPetWindow : Window
                     break;
 
                 case "update-settings":
-                    if (root.TryGetProperty("settings", out _))
-                    {
-                        LogDiagnostic(
-                            "Updating stage settings from React toolbar.");
-                    }
+                    LogDiagnostic("Updating stage settings from React toolbar.");
                     break;
 
-                // NEW: Open or focus the main chat window.
                 case "open-chat":
                     LogDiagnostic("Open Chat requested from pet toolbar.");
 
@@ -479,21 +413,16 @@ public partial class DesktopPetWindow : Window
                             else
                             {
                                 if (!mainWindow.IsVisible)
-                                {
                                     mainWindow.Show();
-                                }
 
                                 if (mainWindow.WindowState == WindowState.Minimized)
-                                {
                                     mainWindow.WindowState = WindowState.Normal;
-                                }
 
                                 mainWindow.Activate();
                             }
 
                             mainWindow.Activate();
                             mainWindow.Focus();
-
                             LogDiagnostic("Main chat window opened or focused.");
                         }
                         catch (Exception ex)
@@ -502,8 +431,7 @@ public partial class DesktopPetWindow : Window
 
                             MessageBox.Show(
                                 this,
-                                "Lumi couldn't open the chat window.\n\n" +
-                                ex.Message,
+                                "Lumi couldn't open the chat window.\n\n" + ex.Message,
                                 "Lumi",
                                 MessageBoxButton.OK,
                                 MessageBoxImage.Error);
@@ -519,15 +447,16 @@ public partial class DesktopPetWindow : Window
                 case "open-control-menu":
                     Dispatcher.Invoke(() =>
                     {
-                        // Check if control window is already open to avoid spamming multiple windows
                         var existingWindow = System.Windows.Application.Current.Windows
                             .OfType<FufuuControlWindow>()
                             .FirstOrDefault();
 
-                        if (existingWindow == null)
+                        if (existingWindow is null)
                         {
-                            var controlWindow = new FufuuControlWindow(this);
-                            controlWindow.Owner = this;
+                            var controlWindow = new FufuuControlWindow(this)
+                            {
+                                Owner = this
+                            };
                             controlWindow.Show();
                         }
                         else
@@ -539,7 +468,6 @@ public partial class DesktopPetWindow : Window
 
                 case "pet-click":
                     LogDiagnostic("Pet clicked.");
-
                     Speak("Yes?", 2500);
 
                     _reactionTimer?.Stop();
@@ -563,11 +491,7 @@ public partial class DesktopPetWindow : Window
 
                     _reactionToken = reactionToken;
 
-                    SendToWeb(new
-                    {
-                        type = "play-motion",
-                        motionId = "wave"
-                    });
+                    SendToWeb(new { type = "play-motion", motionId = "wave" });
 
                     _reactionTimer = new DispatcherTimer
                     {
@@ -579,8 +503,7 @@ public partial class DesktopPetWindow : Window
                         _reactionTimer?.Stop();
                         _reactionTimer = null;
 
-                        if (_reactionToken == reactionToken &&
-                            reactionToken.HasValue)
+                        if (_reactionToken == reactionToken && reactionToken.HasValue)
                         {
                             _reactionToken = null;
                             _behavior.FinishTemporary(reactionToken.Value);
@@ -594,6 +517,11 @@ public partial class DesktopPetWindow : Window
                     try
                     {
                         DragMove();
+
+                        // A manual drag establishes a new reference position.
+                        _baseLeft = Left;
+                        _baseTop = Top;
+                        _basePositionInitialized = true;
                     }
                     catch (InvalidOperationException ex)
                     {
@@ -616,8 +544,7 @@ public partial class DesktopPetWindow : Window
                     break;
 
                 default:
-                    LogDiagnostic(
-                        $"Unhandled web message type: {messageType}");
+                    LogDiagnostic($"Unhandled web message type: {typeElement.GetString()}");
                     break;
             }
         }
@@ -631,9 +558,6 @@ public partial class DesktopPetWindow : Window
         }
     }
 
-    /// <summary>
-    /// Sends a speech message to the React pet stage.
-    /// </summary>
     public void Speak(string text, int durationMs = 4000)
     {
         SendToWeb(new
@@ -644,17 +568,10 @@ public partial class DesktopPetWindow : Window
         });
     }
 
-    /// <summary>
-    /// Splits a long response into sentences and displays them sequentially.
-    /// </summary>
-    public void SpeakSequence(
-        string fullText,
-        int durationPerSentenceMs = 4500)
+    public void SpeakSequence(string fullText, int durationPerSentenceMs = 4500)
     {
-        var sentences =
-            System.Text.RegularExpressions.Regex.Split(
-                fullText,
-                @"(?<=[.!?])\s+")
+        var sentences = System.Text.RegularExpressions.Regex
+            .Split(fullText, @"(?<=[.!?])\s+")
             .Where(s => !string.IsNullOrWhiteSpace(s))
             .ToList();
 
@@ -687,7 +604,6 @@ public partial class DesktopPetWindow : Window
                 "Skipped web message because WebView isn't ready. " +
                 $"Ready={_webReady}, " +
                 $"payload={JsonSerializer.Serialize(payload, WebJsonOptions)}");
-
             return;
         }
 
@@ -700,15 +616,15 @@ public partial class DesktopPetWindow : Window
         }
         catch (Exception ex)
         {
-            LogDiagnostic(
-                $"Failed to send message to pet stage: {ex.Message}");
+            LogDiagnostic($"Failed to send message to pet stage: {ex.Message}");
         }
     }
 
     private void SendSettings()
     {
         LogDiagnostic(
-            $"Sending settings. DisplayMode={_settings.DisplayMode}");
+            $"Sending settings. DisplayMode={_settings.DisplayMode}, " +
+            $"X={_settings.CharacterX}, Y={_settings.CharacterY}");
 
         SendToWeb(new
         {
@@ -717,24 +633,60 @@ public partial class DesktopPetWindow : Window
         });
     }
 
-    private void Mode2D_Click(object sender, RoutedEventArgs e)
+    public DesktopStageSettings Settings => _settings;
+
+    public void ApplySettings(DesktopStageSettings next)
     {
-        SetMode("2d");
+        if (!next.IsValid())
+            throw new ArgumentException(
+                "The pet preferences are invalid.", nameof(next));
+
+        // Keep the same reference position while changing window dimensions.
+        var oldWidth = Width;
+        var oldHeight = Height;
+
+        _settings = next;
+
+        Width = _settings.Width * _settings.CharacterScale;
+        Height = _settings.Height * _settings.CharacterScale;
+
+        // Preserve the current top-left position as the baseline. X/Y are then
+        // applied to the whole WPF window by ApplyWindowPosition().
+        if (!_basePositionInitialized)
+        {
+            _baseLeft = Left;
+            _baseTop = Top;
+            _basePositionInitialized = true;
+        }
+        else
+        {
+            _baseLeft += (oldWidth - Width) / 2.0;
+            _baseTop += (oldHeight - Height) / 2.0;
+        }
+
+        ApplyWindowPosition();
+
+        Topmost = _settings.AlwaysOnTop;
+
+        SaveSettings();
+        SendSettings();
+
+        LogDiagnostic(
+            $"Pet preferences applied. Mode={_settings.DisplayMode}, " +
+            $"Scale={_settings.CharacterScale}, " +
+            $"X={_settings.CharacterX}, Y={_settings.CharacterY}, " +
+            $"WindowSize={Width}x{Height}");
     }
 
-    private void Mode3D_Click(object sender, RoutedEventArgs e)
-    {
-        SetMode("3d");
-    }
+    private void Mode2D_Click(object sender, RoutedEventArgs e) => SetMode("2d");
+
+    private void Mode3D_Click(object sender, RoutedEventArgs e) => SetMode("3d");
 
     private void SetMode(string mode)
     {
         LogDiagnostic($"Changing display mode to: {mode}");
 
-        _settings = _settings with
-        {
-            DisplayMode = mode
-        };
+        _settings = _settings with { DisplayMode = mode };
 
         SaveSettings();
         SendSettings();
@@ -755,22 +707,12 @@ public partial class DesktopPetWindow : Window
         if (_settings.RoamingEnabled)
         {
             _behavior.SetBase(PetBehavior.Walking);
-
-            SendToWeb(new
-            {
-                type = "play-motion",
-                motionId = "walking"
-            });
+            SendToWeb(new { type = "play-motion", motionId = "walking" });
         }
         else
         {
             _behavior.SetBase(PetBehavior.Idle);
-
-            SendToWeb(new
-            {
-                type = "play-motion",
-                motionId = "idle"
-            });
+            SendToWeb(new { type = "play-motion", motionId = "idle" });
         }
     }
 
@@ -802,7 +744,6 @@ public partial class DesktopPetWindow : Window
             return;
 
         var displays = DesktopStageSettings.GetDisplays();
-
         var display = displays.FirstOrDefault(x => x.IsPrimary)
             ?? displays.FirstOrDefault();
 
@@ -815,9 +756,7 @@ public partial class DesktopPetWindow : Window
         if (max <= min)
             return;
 
-        var step = Math.Max(
-            0.5,
-            _settings.WalkingSpeed * 8.0);
+        var step = Math.Max(0.5, _settings.WalkingSpeed * 8.0);
 
         Left += _roamDirection * step;
 
@@ -826,29 +765,20 @@ public partial class DesktopPetWindow : Window
             Left = min;
             _roamDirection = 1;
 
-            SendToWeb(new
-            {
-                type = "play-motion",
-                motionId = "walking"
-            });
+            SendToWeb(new { type = "play-motion", motionId = "walking" });
         }
         else if (Left >= max)
         {
             Left = max;
             _roamDirection = -1;
 
-            SendToWeb(new
-            {
-                type = "play-motion",
-                motionId = "walking"
-            });
+            SendToWeb(new { type = "play-motion", motionId = "walking" });
         }
     }
 
     private void PlaceNearPrimaryWorkArea()
     {
         var displays = DesktopStageSettings.GetDisplays();
-
         var screen = displays.FirstOrDefault(x => x.IsPrimary)
             ?? displays.FirstOrDefault();
 
@@ -861,6 +791,54 @@ public partial class DesktopPetWindow : Window
 
         Left = screen.WorkArea.Right - Width - 24;
         Top = screen.WorkArea.Bottom - Height - 24;
+    }
+
+    /// <summary>
+    /// Applies the X/Y offsets to the WPF window itself, not the renderer.
+    /// X/Y range is -1 to 1, with zero meaning the default anchored position.
+    /// </summary>
+    private void ApplyWindowPosition()
+    {
+        var displays = DesktopStageSettings.GetDisplays();
+        var display = displays.FirstOrDefault(x => x.IsPrimary)
+            ?? displays.FirstOrDefault();
+
+        if (display is null)
+            return;
+
+        var area = display.WorkArea;
+
+        // Keep the baseline inside the working area even if scale changed.
+        var maxLeft = Math.Max(area.Left, area.Right - Width);
+        var maxTop = Math.Max(area.Top, area.Bottom - Height);
+
+        _baseLeft = Math.Clamp(_baseLeft, area.Left, maxLeft);
+        _baseTop = Math.Clamp(_baseTop, area.Top, maxTop);
+
+        // Normalize the offsets against available travel distance.
+        var availableX = Math.Max(0, area.Width - Width);
+        var availableY = Math.Max(0, area.Height - Height);
+
+        var offsetX = _settings.CharacterX * availableX;
+        var offsetY = _settings.CharacterY * availableY;
+
+        var targetLeft = Math.Clamp(
+            _baseLeft + offsetX, area.Left, maxLeft);
+
+        var targetTop = Math.Clamp(
+            _baseTop + offsetY, area.Top, maxTop);
+
+        _applyingWindowPosition = true;
+
+        try
+        {
+            Left = targetLeft;
+            Top = targetTop;
+        }
+        finally
+        {
+            _applyingWindowPosition = false;
+        }
     }
 
     protected override void OnClosed(EventArgs e)
@@ -881,25 +859,23 @@ public partial class DesktopPetWindow : Window
         base.OnClosed(e);
     }
 
-    private void Close_Click(object sender, RoutedEventArgs e)
-    {
-        Close();
-    }
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-    private void Window_KeyDown(
-        object sender,
-        System.Windows.Input.KeyEventArgs e)
+    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key == System.Windows.Input.Key.Escape)
-        {
             Close();
-        }
     }
 
     private void SaveSettings()
     {
         try
         {
+            var directory = Path.GetDirectoryName(_settingsPath);
+
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
             _settings.Save(_settingsPath);
         }
         catch (Exception ex) when (
@@ -934,4 +910,3 @@ public partial class DesktopPetWindow : Window
         }
     }
 }
-

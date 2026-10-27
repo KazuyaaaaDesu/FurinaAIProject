@@ -2,22 +2,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Live2DViewer from "./Live2DViewer";
 import SpriteViewer from "./SpriteViewer";
-
-// TEMPORARILY DISABLED:
-// To restore 3D later:
-// 1. Uncomment the VRMViewer import below.
-// 2. Restore "3d" in the StageSettings displayMode type.
-// 3. Restore "3d" mode validation in the settings receiver.
-// 4. Restore the three-mode toggle cycle in the message handler.
-// 5. Restore the VRMViewer rendering branch below.
-// 6. Re-enable the 3D option in the WPF toolbar.
-// import VRMViewer from "./VRMViewer";
-
+import VRMViewer from "./VRMViewer";
 import type { CharacterScreenGeometry } from "./desktopStage";
+import type { PersonalityMode } from "./LumiPersonality";
 import "./PetStageHost.css";
 
+type DisplayMode = "png" | "2d" | "3d";
+
 type StageSettings = {
-  displayMode: "png" | "2d";
+  displayMode: DisplayMode;
   characterScale: number;
   characterX: number;
   characterY: number;
@@ -63,13 +56,100 @@ declare global {
   }
 }
 
-function post(
-  type: string,
-  extra: Record<string, unknown> = {},
-) {
+function post(type: string, extra: Record<string, unknown> = {}) {
   window.chrome?.webview?.postMessage(
     JSON.stringify({ type, ...extra }),
   );
+}
+
+function readValue<T>(
+  source: Record<string, unknown>,
+  camelCase: string,
+  pascalCase: string,
+  fallback: T,
+): T {
+  const value = source[camelCase] ?? source[pascalCase];
+
+  return value === undefined || value === null
+    ? fallback
+    : (value as T);
+}
+
+function normalizeSettings(value: unknown): StageSettings {
+  if (!value || typeof value !== "object") {
+    return defaults;
+  }
+
+  const raw = value as Record<string, unknown>;
+
+  const mode = readValue<unknown>(
+    raw,
+    "displayMode",
+    "DisplayMode",
+    defaults.displayMode,
+  );
+
+  const displayMode: DisplayMode =
+    mode === "png" || mode === "2d" || mode === "3d"
+      ? mode
+      : defaults.displayMode;
+
+  const numberValue = (
+    camelCase: string,
+    pascalCase: string,
+    fallback: number,
+  ): number => {
+    const value = readValue<unknown>(
+      raw,
+      camelCase,
+      pascalCase,
+      fallback,
+    );
+
+    return typeof value === "number" && Number.isFinite(value)
+      ? value
+      : fallback;
+  };
+
+  const roamingValue = readValue<unknown>(
+    raw,
+    "roamingEnabled",
+    "RoamingEnabled",
+    defaults.roamingEnabled,
+  );
+
+  return {
+    displayMode,
+    characterScale: numberValue(
+      "characterScale",
+      "CharacterScale",
+      defaults.characterScale,
+    ),
+    characterX: numberValue(
+      "characterX",
+      "CharacterX",
+      defaults.characterX,
+    ),
+    characterY: numberValue(
+      "characterY",
+      "CharacterY",
+      defaults.characterY,
+    ),
+    facingDegrees: numberValue(
+      "facingDegrees",
+      "FacingDegrees",
+      defaults.facingDegrees,
+    ),
+    walkingSpeed: numberValue(
+      "walkingSpeed",
+      "WalkingSpeed",
+      defaults.walkingSpeed,
+    ),
+    roamingEnabled:
+      typeof roamingValue === "boolean"
+        ? roamingValue
+        : defaults.roamingEnabled,
+  };
 }
 
 function isLumiEmotion(value: unknown): value is LumiEmotion {
@@ -164,14 +244,12 @@ export default function PetStageHost() {
   const [settings, setSettings] =
     useState<StageSettings>(defaults);
 
-  const displayModeRef =
-    useRef<StageSettings["displayMode"]>("png");
-
-  // Force PNG only on the first settings message.
-  const initialSettingsReceived = useRef(false);
+  const displayModeRef = useRef<DisplayMode>("png");
 
   const [status, setStatus] = useState("Loading Lumi...");
   const [speechText, setSpeechText] = useState<string | null>(null);
+  const [personalityMode] =
+    useState<PersonalityMode>("balanced");
 
   const toggleToolbar = useCallback(() => {
     post("open-control-menu");
@@ -211,38 +289,21 @@ export default function PetStageHost() {
       const data = message as Record<string, unknown>;
 
       if (data.type === "settings" && data.settings) {
-        const incoming =
-          data.settings as Partial<StageSettings>;
+        const next = normalizeSettings(data.settings);
 
-        const requestedMode: StageSettings["displayMode"] =
-          incoming.displayMode === "2d" ? "2d" : "png";
+        displayModeRef.current = next.displayMode;
+        setSettings(next);
 
-        // PNG is the initial mode, regardless of the saved mode.
-        // Subsequent settings updates can select PNG or Live2D.
-        const displayMode = initialSettingsReceived.current
-          ? requestedMode
-          : "png";
-
-        initialSettingsReceived.current = true;
-        displayModeRef.current = displayMode;
-
-        setSettings((current) => ({
-          ...current,
-          ...defaults,
-          ...incoming,
-          displayMode,
-        }));
-
-        // Tell WPF that PNG was selected for initial startup.
-        if (displayMode !== requestedMode) {
-          post("set-mode", { mode: "png" });
-        }
+        console.info("[PetStage] Settings received:", next);
       }
 
       if (data.type === "toggle-display-mode") {
-        // TEMPORARY TWO-MODE CYCLE: PNG <-> Live2D.
-        const nextMode: StageSettings["displayMode"] =
-          displayModeRef.current === "png" ? "2d" : "png";
+        const modes: DisplayMode[] = ["png", "2d", "3d"];
+        const currentIndex = modes.indexOf(
+          displayModeRef.current,
+        );
+        const nextMode =
+          modes[(currentIndex + 1) % modes.length];
 
         displayModeRef.current = nextMode;
 
@@ -252,6 +313,18 @@ export default function PetStageHost() {
         }));
 
         post("set-mode", { mode: nextMode });
+      }
+
+      if (data.type === "set-mode") {
+        const mode = data.mode;
+
+        if (mode === "png" || mode === "2d" || mode === "3d") {
+          displayModeRef.current = mode;
+          setSettings((current) => ({
+            ...current,
+            displayMode: mode,
+          }));
+        }
       }
 
       if (data.type === "behavior") {
@@ -313,9 +386,12 @@ export default function PetStageHost() {
     };
   }, []);
 
-  const clicked = (_geometry: CharacterScreenGeometry) => {
-    post("pet-click");
-  };
+  const clicked = useCallback(
+    (_geometry: CharacterScreenGeometry) => {
+      post("pet-click");
+    },
+    [],
+  );
 
   const geometryChanged = useCallback(
     (_geometry: CharacterScreenGeometry | null) => {
@@ -330,6 +406,24 @@ export default function PetStageHost() {
     },
     [],
   );
+
+  const characterSettings = {
+    characterScale: settings.characterScale,
+    characterX: settings.characterX,
+    characterY: settings.characterY,
+    facingDegrees: settings.facingDegrees,
+    walkingSpeed: settings.walkingSpeed,
+  };
+
+  // Character X/Y are normalized offsets from the settings UI.
+  // Apply them to the renderer container for PNG, Live2D and VRM.
+  const characterPositionStyle = {
+    position: "absolute" as const,
+    inset: 0,
+    transform: "none",
+    transformOrigin: "center center",
+    pointerEvents: "none" as const,
+  };
 
   return (
     <main
@@ -364,38 +458,42 @@ export default function PetStageHost() {
       {speechText && (
         <div
           className="speech-bubble-container"
-          style={{ pointerEvents: "auto" }}
+          style={{ pointerEvents: "none" }}
         >
           <div className="speech-bubble">{speechText}</div>
         </div>
       )}
 
-      {settings.displayMode === "png" ? (
-        <SpriteViewer
-          characterScale={settings.characterScale}
-          onPetClick={clicked}
-          onPointerInteractive={pointerInteractive}
-          onCharacterGeometryChange={geometryChanged}
-        />
-      ) : (
-        <Live2DViewer
-          characterScale={settings.characterScale}
-          onPetClick={clicked}
-          onPointerInteractive={pointerInteractive}
-          onCharacterGeometryChange={geometryChanged}
-        />
-      )}
-
-      {/*
-        TO RESTORE 3D LATER:
-        1. Uncomment the VRMViewer import.
-        2. Add "3d" to StageSettings.displayMode.
-        3. Restore 3D settings validation.
-        4. Restore the three-mode toggle cycle.
-        5. Restore the VRMViewer rendering branch.
-        6. Re-enable the WPF toolbar's 3D option.
-        7. Rebuild the React assets used by WebView2.
-      */}
+      <div
+        className="pet-stage__character-position"
+        style={characterPositionStyle}
+      >
+        {settings.displayMode === "png" ? (
+          <SpriteViewer
+            characterScale={1}
+            onPetClick={clicked}
+            onPointerInteractive={pointerInteractive}
+            onCharacterGeometryChange={geometryChanged}
+          />
+        ) : settings.displayMode === "3d" ? (
+          <VRMViewer
+            roamingEnabled={settings.roamingEnabled}
+            autonomousBehaviorEnabled={settings.roamingEnabled}
+            personalityMode={personalityMode}
+            onPetClick={clicked}
+            onPointerInteractive={pointerInteractive}
+            onCharacterGeometryChange={geometryChanged}
+            characterSettings={characterSettings}
+          />
+        ) : (
+          <Live2DViewer
+            characterScale={1}
+            onPetClick={clicked}
+            onPointerInteractive={pointerInteractive}
+            onCharacterGeometryChange={geometryChanged}
+          />
+        )}
+      </div>
     </main>
   );
 }

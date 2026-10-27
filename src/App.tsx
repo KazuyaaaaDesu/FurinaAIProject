@@ -16,24 +16,15 @@ const DISPLAY_MODE_CHANNEL = "lumi-display-mode";
 const AVATAR_COMMAND_KEY = "lumi-avatar-command";
 const AVATAR_COMMAND_CHANNEL = "lumi-avatar-command";
 
-// Maximum number of memories Lumi can store.
 const MAX_MEMORIES = 200;
-
-// Maximum length of a single memory, measured in characters.
 const MAX_MEMORY_LENGTH = 1000;
-
-// Minimum delay between ambient screen checks (8 seconds).
 const AMBIENT_MIN_DELAY = 8 * 1000;
-
-// Maximum delay between ambient screen checks (12 seconds).
 const AMBIENT_MAX_DELAY = 12 * 1000;
-
-// Minimum cooldown between ambient comments (15 seconds).
 const AMBIENT_COOLDOWN = 15 * 1000;
 
-type DisplayMode = "2d" | "3d";
-
+type DisplayMode = "2d" | "sprite";
 type VoiceLanguage = "auto" | "ja" | "en" | "zh";
+type AvatarCommandAction = "memories" | "preferences";
 
 function isVoiceLanguage(value: string | null): value is VoiceLanguage {
   return (
@@ -123,6 +114,8 @@ function getSpeechBubbleBridge(): SpeechBubbleBridge | undefined {
     }
   ).sakuraDesktop;
 }
+
+
 
 async function browserSpeechCommand(
   action: "set-enabled" | "update-text",
@@ -442,16 +435,22 @@ function ChatApp() {
   const [ambientEnabled, setAmbientEnabled] = useState(false);
   const [ambientStarting, setAmbientStarting] = useState(false);
   const [speechBubbleEnabled, setSpeechBubbleEnabled] = useState(false);
-  const [voiceEnabled, setVoiceEnabled] = useState(() => window.localStorage.getItem("Lumi-voice-enabled") === "true");
+  const [voiceEnabled, setVoiceEnabled] = useState(
+    () => window.localStorage.getItem("Lumi-voice-enabled") === "true",
+  );
   const [voiceOptionsOpen, setVoiceOptionsOpen] = useState(false);
   const [voiceLanguage, setVoiceLanguage] = useState<VoiceLanguage>(() => {
-  const saved = window.localStorage.getItem("Lumi-voice-language");
+    const saved = window.localStorage.getItem("Lumi-voice-language");
     return isVoiceLanguage(saved) ? saved : "auto";
   });
-  const [voiceRate, setVoiceRate] = useState(() => Number(window.localStorage.getItem("Lumi-voice-rate") || "1"));
+  const [voiceRate, setVoiceRate] = useState(() =>
+    Number(window.localStorage.getItem("Lumi-voice-rate") || "1"),
+  );
 
   const [displayMode, setDisplayMode] = useState<DisplayMode>(() =>
-    window.localStorage.getItem("lumi-display-mode") === "3d" ? "3d" : "2d",
+    window.localStorage.getItem("lumi-display-mode") === "sprite"
+      ? "sprite"
+      : "2d",
   );
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -474,7 +473,7 @@ function ChatApp() {
     messagesRef.current = messages;
   }, [messages]);
 
-  // Receive the enabled state from Electron, or poll the browser bridge.
+  // Receive speech-bubble state from the desktop bridge, or poll the browser bridge.
   useEffect(() => {
     let cancelled = false;
     const bridge = getSpeechBubbleBridge();
@@ -544,22 +543,43 @@ function ChatApp() {
     };
   }, []);
 
+  // Receive desktop pet toolbar commands, including Pet Preferences.
+  
   useEffect(() => {
     const handleAvatarCommand = (value: unknown) => {
       if (typeof value !== "object" || value === null) return;
+
       const command = value as Record<string, unknown>;
+
       if (
         typeof command.id !== "string" ||
-        command.action !== "memories"
+        typeof command.action !== "string"
       ) {
         return;
       }
 
-      setMemoryPanelOpen(true);
+      const action = command.action as AvatarCommandAction;
+
+      switch (action) {
+        case "memories":
+          setMemoryPanelOpen(true);
+          break;
+
+        case "preferences":
+          setVoiceOptionsOpen(true);
+          break;
+
+        default:
+          return;
+      }
+
+      // Clear the command only if it is the command we just handled.
       try {
         const stored = window.localStorage.getItem(AVATAR_COMMAND_KEY);
+
         if (stored) {
           const storedCommand: unknown = JSON.parse(stored);
+
           if (
             typeof storedCommand === "object" &&
             storedCommand !== null &&
@@ -569,16 +589,23 @@ function ChatApp() {
           }
         }
       } catch (error) {
-        console.warn("[Lumi] Could not clear the handled avatar command:", error);
+        console.warn(
+          "[Lumi] Could not clear the handled avatar command:",
+          error,
+        );
       }
     };
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== AVATAR_COMMAND_KEY || !event.newValue) return;
+
       try {
         handleAvatarCommand(JSON.parse(event.newValue) as unknown);
       } catch (error) {
-        console.warn("[Lumi] Could not read an avatar toolbar command:", error);
+        console.warn(
+          "[Lumi] Could not read an avatar toolbar command:",
+          error,
+        );
       }
     };
 
@@ -586,22 +613,31 @@ function ChatApp() {
       typeof BroadcastChannel === "undefined"
         ? null
         : new BroadcastChannel(AVATAR_COMMAND_CHANNEL);
+
     const handleBroadcast = (event: MessageEvent<unknown>) => {
       handleAvatarCommand(event.data);
     };
 
     channel?.addEventListener("message", handleBroadcast);
     window.addEventListener("storage", handleStorage);
+
     const unsubscribeMemoryRequest =
       window.sakuraDesktop?.onOpenMemories?.(() => {
         setMemoryPanelOpen(true);
       });
 
+    // Handle a command that was stored before this effect started.
     try {
       const stored = window.localStorage.getItem(AVATAR_COMMAND_KEY);
-      if (stored) handleAvatarCommand(JSON.parse(stored) as unknown);
+
+      if (stored) {
+        handleAvatarCommand(JSON.parse(stored) as unknown);
+      }
     } catch (error) {
-      console.warn("[Lumi] Could not read a pending avatar toolbar command:", error);
+      console.warn(
+        "[Lumi] Could not read a pending avatar toolbar command:",
+        error,
+      );
     }
 
     return () => {
@@ -611,6 +647,7 @@ function ChatApp() {
       unsubscribeMemoryRequest?.();
     };
   }, []);
+
 
   useEffect(() => {
     window.localStorage.setItem("lumi-display-mode", displayMode);
@@ -935,113 +972,113 @@ function ChatApp() {
     setAmbientStarting(false);
 
     if (showStatus) setError("");
-  }  
-
-async function runAmbientCheck() {
-  if (!ambientEnabledRef.current) return;
-
-  if (ambientCheckRunningRef.current || busyRef.current) {
-    scheduleAmbientCheck();
-    return;
   }
 
-  const video = ambientVideoRef.current;
-  const previousFrame = previousFrameRef.current;
-
-  if (!video || !previousFrame) {
-    stopAmbientMode(false);
-    setError(
-      "Ambient Mode stopped because the screen-sharing stream is unavailable.",
-    );
-    return;
-  }
-
-  ambientCheckRunningRef.current = true;
-
-  try {
-    const currentFrame = await captureFrame(video);
-
+  async function runAmbientCheck() {
     if (!ambientEnabledRef.current) return;
 
-    previousFrameRef.current = currentFrame;
+    if (ambientCheckRunningRef.current || busyRef.current) {
+      scheduleAmbientCheck();
+      return;
+    }
 
-    const response = await fetch(OLLAMA_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: VISION_MODEL,
-        stream: false,
-        options: {
-          temperature: 0.4,
-          top_p: 0.9,
-          num_ctx: 8192,
-          num_predict: 40,
-        },
-        messages: [
-          {
-            role: "system",
-            content: AMBIENT_SYSTEM_PROMPT,
-          },
-          {
-            role: "user",
-            content:
-              "Look at this current desktop screenshot. " +
-              "Make one brief, natural in-character comment only if " +
-              "something visible is worth mentioning. Avoid generic " +
-              "observations and repeated comments. Otherwise return " +
-              "exactly NO_COMMENT.",
-            images: [currentFrame],
-          },
-        ],
-      }),
-    });
+    const video = ambientVideoRef.current;
+    const previousFrame = previousFrameRef.current;
 
-    if (!response.ok) {
-      throw new Error(
-        `Ambient vision request failed: HTTP ${response.status} — ` +
-          `${await readOllamaError(response)}`,
+    if (!video || !previousFrame) {
+      stopAmbientMode(false);
+      setError(
+        "Ambient Mode stopped because the screen-sharing stream is unavailable.",
       );
-    }
-
-    const data = (await response.json()) as {
-      message?: { content?: string };
-      error?: string;
-    };
-
-    if (data.error) throw new Error(data.error);
-    if (!ambientEnabledRef.current) return;
-
-    const remark = cleanAssistantText(data.message?.content ?? "");
-
-    if (!remark || isNoComment(remark)) return;
-
-    const now = Date.now();
-
-    if (now - lastAmbientCommentAtRef.current < AMBIENT_COOLDOWN) {
       return;
     }
 
-    if (
-      remark.toLowerCase() ===
-      lastAmbientCommentRef.current.toLowerCase()
-    ) {
-      return;
-    }
+    ambientCheckRunningRef.current = true;
 
-    if (busyRef.current) return;
+    try {
+      const currentFrame = await captureFrame(video);
 
-    lastAmbientCommentAtRef.current = now;
-    lastAmbientCommentRef.current = remark;
+      if (!ambientEnabledRef.current) return;
 
-    const updatedMessages: Message[] = [
-      ...messagesRef.current,
-      { role: "assistant", content: remark },
-    ];
+      previousFrameRef.current = currentFrame;
 
-    messagesRef.current = updatedMessages;
-    setMessages(updatedMessages);
+      const response = await fetch(OLLAMA_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: VISION_MODEL,
+          stream: false,
+          options: {
+            temperature: 0.4,
+            top_p: 0.9,
+            num_ctx: 8192,
+            num_predict: 40,
+          },
+          messages: [
+            {
+              role: "system",
+              content: AMBIENT_SYSTEM_PROMPT,
+            },
+            {
+              role: "user",
+              content:
+                "Look at this current desktop screenshot. " +
+                "Make one brief, natural in-character comment only if " +
+                "something visible is worth mentioning. Avoid generic " +
+                "observations and repeated comments. Otherwise return " +
+                "exactly NO_COMMENT.",
+              images: [currentFrame],
+            },
+          ],
+        }),
+      });
 
-    // Speak Ambient Mode comments through Piper Plus when voice is enabled.
+      if (!response.ok) {
+        throw new Error(
+          `Ambient vision request failed: HTTP ${response.status} — ` +
+            `${await readOllamaError(response)}`,
+        );
+      }
+
+      const data = (await response.json()) as {
+        message?: { content?: string };
+        error?: string;
+      };
+
+      if (data.error) throw new Error(data.error);
+      if (!ambientEnabledRef.current) return;
+
+      const remark = cleanAssistantText(data.message?.content ?? "");
+
+      if (!remark || isNoComment(remark)) return;
+
+      const now = Date.now();
+
+      if (now - lastAmbientCommentAtRef.current < AMBIENT_COOLDOWN) {
+        return;
+      }
+
+      if (
+        remark.toLowerCase() ===
+        lastAmbientCommentRef.current.toLowerCase()
+      ) {
+        return;
+      }
+
+      if (busyRef.current) return;
+
+      lastAmbientCommentAtRef.current = now;
+      lastAmbientCommentRef.current = remark;
+
+      const updatedMessages: Message[] = [
+        ...messagesRef.current,
+        { role: "assistant", content: remark },
+      ];
+
+      messagesRef.current = updatedMessages;
+      setMessages(updatedMessages);
+
+      // Speak Ambient Mode comments through Piper Plus when voice is enabled.
       if (voiceEnabled && window.sakuraDesktop?.speakText) {
         void window.sakuraDesktop
           .speakText(remark)
@@ -1057,74 +1094,71 @@ async function runAmbientCheck() {
           });
       }
 
-    try {
-      const emotion = await chooseLumiEmotion(
-        remark,
-        new AbortController().signal,
-      );
+      try {
+        const emotion = await chooseLumiEmotion(
+          remark,
+          new AbortController().signal,
+        );
+
+        if (ambientEnabledRef.current) {
+          emotionChannelRef.current?.postMessage(emotion);
+        }
+      } catch (emotionError) {
+        console.warn(
+          "[Lumi] Ambient emotion classification failed:",
+          emotionError,
+        );
+
+        if (ambientEnabledRef.current) {
+          emotionChannelRef.current?.postMessage("neutral");
+        }
+      }
+
+      try {
+        await saveConversation(updatedMessages);
+      } catch (saveError) {
+        console.warn(
+          "[Lumi] Could not save ambient comment:",
+          saveError,
+        );
+      }
+    } catch (ambientError) {
+      const errorMessage = getErrorMessage(ambientError);
+
+      console.error("[Lumi] Ambient check failed:", ambientError);
+
+      const memoryError =
+        /requires more system memory|not enough memory/i.test(errorMessage);
+
+      const contextError =
+        /exceeds the available context size|context length|too many tokens/i.test(
+          errorMessage,
+        );
+
+      if (memoryError || contextError) {
+        stopAmbientMode(false);
+
+        setError(
+          memoryError
+            ? "Ambient Mode paused because the vision model needs more memory. Reduce screenshot size or context usage before restarting."
+            : "Ambient Mode paused because the screenshot request exceeds the vision context. Increase num_ctx carefully or reduce screenshot size before restarting.",
+        );
+
+        return;
+      }
 
       if (ambientEnabledRef.current) {
-        emotionChannelRef.current?.postMessage(emotion);
+        setError(`Ambient check failed: ${errorMessage}`);
       }
-    } catch (emotionError) {
-      console.warn(
-        "[Lumi] Ambient emotion classification failed:",
-        emotionError,
-      );
+    } finally {
+      ambientCheckRunningRef.current = false;
 
       if (ambientEnabledRef.current) {
-        emotionChannelRef.current?.postMessage("neutral");
+        scheduleAmbientCheck();
       }
-    }
-
-    try {
-      await saveConversation(updatedMessages);
-    } catch (saveError) {
-      console.warn(
-        "[Lumi] Could not save ambient comment:",
-        saveError,
-      );
-    }
-  } catch (ambientError) {
-    const errorMessage = getErrorMessage(ambientError);
-
-    console.error("[Lumi] Ambient check failed:", ambientError);
-
-    const memoryError =
-      /requires more system memory|not enough memory/i.test(errorMessage);
-
-    const contextError =
-      /exceeds the available context size|context length|too many tokens/i.test(
-        errorMessage,
-      );
-
-    if (memoryError || contextError) {
-      stopAmbientMode(false);
-
-      setError(
-        memoryError
-          ? "Ambient Mode paused because the vision model needs more memory. Reduce screenshot size or context usage before restarting."
-          : "Ambient Mode paused because the screenshot request exceeds the vision context. Increase num_ctx carefully or reduce screenshot size before restarting.",
-      );
-
-      return;
-    }
-
-    if (ambientEnabledRef.current) {
-      setError(`Ambient check failed: ${errorMessage}`);
-    }
-  } finally {
-    ambientCheckRunningRef.current = false;
-
-    if (ambientEnabledRef.current) {
-      scheduleAmbientCheck();
     }
   }
-}
 
-
-
-  
   function scheduleAmbientCheck() {
     if (!ambientEnabledRef.current) return;
 
@@ -1138,8 +1172,6 @@ async function runAmbientCheck() {
     }, getRandomAmbientDelay());
   }
 
-
-  
   async function startAmbientMode() {
     if (ambientEnabledRef.current || ambientStarting || !storageReady) {
       return;
@@ -1147,7 +1179,7 @@ async function runAmbientCheck() {
 
     setError("");
 
-    console.log("[Ambient] Electron:", Boolean(window.sakuraDesktop));
+    console.log("[Ambient] Desktop bridge:", Boolean(window.sakuraDesktop));
     console.log(
       "[Ambient] getDisplayMedia:",
       typeof navigator.mediaDevices?.getDisplayMedia,
@@ -1267,7 +1299,6 @@ async function runAmbientCheck() {
       setAmbientStarting(false);
     }
   }
-
 
   async function captureScreen() {
     setError("");
@@ -1524,13 +1555,19 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
       setMessages(completeConversation);
 
       if (voiceEnabled && window.sakuraDesktop?.speakText) {
-        void window.sakuraDesktop.speakText(finalReply, { language: voiceLanguage, rate: voiceRate }).then((result) => {
-          if (!result.ok && result.error) {
-            setError(`Lumi voice failed: ${result.error}`);
-          }
-        }).catch((voiceError: unknown) => {
-          setError(`Lumi voice failed: ${getErrorMessage(voiceError)}`);
-        });
+        void window.sakuraDesktop
+          .speakText(finalReply, {
+            language: voiceLanguage,
+            rate: voiceRate,
+          })
+          .then((result) => {
+            if (!result.ok && result.error) {
+              setError(`Lumi voice failed: ${result.error}`);
+            }
+          })
+          .catch((voiceError: unknown) => {
+            setError(`Lumi voice failed: ${getErrorMessage(voiceError)}`);
+          });
       }
 
       try {
@@ -1683,15 +1720,15 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
                 aria-pressed={displayMode === "2d"}
                 onClick={() => setDisplayMode("2d")}
               >
-                2D
+                Live2D
               </button>
               <button
                 type="button"
-                className={`mode-option ${displayMode === "3d" ? "active" : ""}`}
-                aria-pressed={displayMode === "3d"}
-                onClick={() => setDisplayMode("3d")}
+                className={`mode-option ${displayMode === "sprite" ? "active" : ""}`}
+                aria-pressed={displayMode === "sprite"}
+                onClick={() => setDisplayMode("sprite")}
               >
-                3D
+                Sprite
               </button>
             </div>
 
@@ -1719,7 +1756,7 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
                   setError("");
                 } else {
                   setError(
-                    "Couldn't reach Lumi's speech-bubble bridge. Start the Electron app and refresh this browser page.",
+                    "Couldn't reach Lumi's speech-bubble bridge. Make sure Lumi's desktop app and speech-bubble service are running, then refresh this page.",
                   );
                 }
               }}
@@ -1737,7 +1774,11 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
               onClick={() => {
                 const nextEnabled = !voiceEnabled;
                 setVoiceEnabled(nextEnabled);
-                window.localStorage.setItem("Lumi-voice-enabled", String(nextEnabled));
+                window.localStorage.setItem(
+                  "Lumi-voice-enabled",
+                  String(nextEnabled),
+                );
+
                 if (!nextEnabled) {
                   void window.sakuraDesktop?.stopSpeech();
                 }
@@ -1745,6 +1786,7 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
             >
               {voiceEnabled ? "Voice ON · Stop" : "Voice OFF"}
             </button>
+
             <button
               type="button"
               className="capture-button voice-options-button"
@@ -1838,7 +1880,7 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
               <textarea
                 value={memoryDraft}
                 onChange={(event) => setMemoryDraft(event.target.value)}
-                placeholder="Example: I'm building Lumi with Electron, React, and Ollama."
+                placeholder="Example: I'm building Lumi with WPF, React, and Ollama."
                 rows={2}
                 maxLength={MAX_MEMORY_LENGTH}
                 disabled={memoryLoading || memories.length >= MAX_MEMORIES}
@@ -2027,13 +2069,37 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
           <span>Powered by Ollama</span>
         </footer>
       </section>
+
       {voiceOptionsOpen && (
-        <div className="voice-options-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setVoiceOptionsOpen(false); }}>
-          <section className="voice-options-dialog" role="dialog" aria-modal="true" aria-labelledby="voice-options-title">
+        <div
+          className="voice-options-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setVoiceOptionsOpen(false);
+            }
+          }}
+        >
+          <section
+            className="voice-options-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="voice-options-title"
+          >
             <div className="voice-options-heading">
-              <div><p className="voice-options-eyebrow">PIPER PLUS</p><h2 id="voice-options-title">Voice options</h2></div>
-              <button type="button" className="voice-options-close" onClick={() => setVoiceOptionsOpen(false)} aria-label="Close voice options">×</button>
+              <div>
+                <p className="voice-options-eyebrow">PIPER PLUS</p>
+                <h2 id="voice-options-title">Voice options</h2>
+              </div>
+              <button
+                type="button"
+                className="voice-options-close"
+                onClick={() => setVoiceOptionsOpen(false)}
+                aria-label="Close voice options"
+              >
+                ×
+              </button>
             </div>
+
             <label className="voice-option-field">
               Speech language
               <select
@@ -2054,16 +2120,44 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
               </select>
 
               <span className="voice-option-help">
-                Automatic chooses Japanese or Chinese for those scripts, and English otherwise.
+                Automatic chooses Japanese or Chinese for those scripts, and
+                English otherwise.
               </span>
             </label>
-            <label className="voice-option-field">Speaking speed <strong>{voiceRate.toFixed(2)}×</strong>
-              <input type="range" min="0.7" max="1.3" step="0.05" value={voiceRate} onChange={(event) => { const value = Number(event.target.value); setVoiceRate(value); window.localStorage.setItem("Lumi-voice-rate", String(value)); }} />
-              <span className="voice-option-help">Lower is slower; higher is faster. Applies to the next reply.</span>
+
+            <label className="voice-option-field">
+              Speaking speed <strong>{voiceRate.toFixed(2)}×</strong>
+              <input
+                type="range"
+                min="0.7"
+                max="1.3"
+                step="0.05"
+                value={voiceRate}
+                onChange={(event) => {
+                  const value = Number(event.target.value);
+                  setVoiceRate(value);
+                  window.localStorage.setItem(
+                    "Lumi-voice-rate",
+                    String(value),
+                  );
+                }}
+              />
+              <span className="voice-option-help">
+                Lower is slower; higher is faster. Applies to the next reply.
+              </span>
             </label>
+
             <div className="voice-options-footer">
-              <span>{voiceEnabled ? "Voice is enabled" : "Voice is currently off"}</span>
-              <button type="button" className="capture-button" onClick={() => setVoiceOptionsOpen(false)}>Done</button>
+              <span>
+                {voiceEnabled ? "Voice is enabled" : "Voice is currently off"}
+              </span>
+              <button
+                type="button"
+                className="capture-button"
+                onClick={() => setVoiceOptionsOpen(false)}
+              >
+                Done
+              </button>
             </div>
           </section>
         </div>
@@ -2082,5 +2176,3 @@ export default function App() {
 
   return <ChatApp />;
 }
-
-

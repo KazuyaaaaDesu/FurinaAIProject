@@ -699,8 +699,3 @@ function Live2DViewer({
 }
 
 export default memo(Live2DViewer);
-
-
-
-
-
