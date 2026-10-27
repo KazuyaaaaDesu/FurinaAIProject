@@ -7,7 +7,8 @@ namespace Fufuu.Wpf.Pet;
 
 public sealed record DesktopStageSettings
 {
-    public string DisplayMode { get; init; } = "2d";
+    public string DisplayMode { get; init; } = "png";
+    public int? RendererModeVersion { get; init; }
     public double Width { get; init; } = 520;
     public double Height { get; init; } = 680;
     public double CharacterScale { get; init; } = 1.0;
@@ -27,7 +28,21 @@ public sealed record DesktopStageSettings
         {
             if (!File.Exists(path)) return Defaults;
             var value = JsonSerializer.Deserialize<DesktopStageSettings>(File.ReadAllText(path), JsonOptions);
-            return value is not null && value.IsValid() ? value : Defaults;
+            if (value is null || !value.IsValid())
+                return Defaults;
+
+            // One-time migration from the older Live2D-default renderer.
+            if (value.RendererModeVersion is null)
+            {
+                value = value with
+                {
+                    DisplayMode = "png",
+                    RendererModeVersion = 1
+                };
+                value.Save(path);
+            }
+
+            return value;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -36,7 +51,7 @@ public sealed record DesktopStageSettings
     }
 
     public bool IsValid() =>
-        (DisplayMode is "2d" or "3d") && double.IsFinite(Width) && Width is >= 240 and <= 10000 &&
+        (DisplayMode is "png" or "2d" or "3d") && double.IsFinite(Width) && Width is >= 240 and <= 10000 &&
         double.IsFinite(Height) && Height is >= 320 and <= 10000 &&
         double.IsFinite(CharacterScale) && CharacterScale is >= 0.5 and <= 1.35 &&
         double.IsFinite(CharacterX) && CharacterX is >= -1 and <= 1 &&
@@ -46,7 +61,7 @@ public sealed record DesktopStageSettings
     public void Save(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, JsonSerializer.Serialize(this, new JsonSerializerOptions(JsonOptions) { WriteIndented = true }));
+        File.WriteAllText(path, JsonSerializer.Serialize(this with { RendererModeVersion = 1 }, new JsonSerializerOptions(JsonOptions) { WriteIndented = true }));
     }
 
     public static IReadOnlyList<DisplayInfo> GetDisplays() =>

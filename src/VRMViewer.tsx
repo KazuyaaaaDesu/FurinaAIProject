@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
@@ -20,7 +20,7 @@ import {
   chooseGesture,
   nextPersonalityWait,
   type PersonalityMode,
-} from "./fufuuPersonality";
+} from "./LumiPersonality";
 import {
   DEFAULT_DESKTOP_STAGE_SETTINGS,
   type CharacterScreenGeometry,
@@ -69,7 +69,7 @@ const autonomousLog = (key: string, message: string) => {
   const last = autonomousLogLast[key] ?? -Infinity;
   if (now - last < 1000) return;
   autonomousLogLast[key] = now;
-  console.info(`[Fufuu autonomous] ${message}`);
+  console.info(`[Lumi autonomous] ${message}`);
 };
 
 const EMOTION_WEIGHTS: Record<
@@ -270,7 +270,7 @@ export default function VRMViewer({
       });
     } catch (error) {
       console.error("Furina 3D viewer could not initialize WebGL:", error);
-      const statusElement = host.querySelector(".fufuu-vrm-status");
+      const statusElement = host.querySelector(".Lumi-vrm-status");
       if (statusElement) {
         statusElement.textContent =
           "3D viewer unavailable: WebGL could not be initialized. Enable hardware acceleration or check your graphics drivers.";
@@ -439,6 +439,15 @@ export default function VRMViewer({
       onPointerInteractiveRef.current(false);
     };
 
+    // WebView2/WPF can route double-clicks on the WebGL canvas differently
+    // from clicks on the PNG and Live2D renderers. Handle the toolbar gesture
+    // directly on the 3D canvas so it works in every display mode.
+    const handleCanvasDoubleClick = (_event: MouseEvent) => {
+      window.chrome?.webview?.postMessage(
+        JSON.stringify({ type: "open-control-menu" }),
+      );
+    };
+
     const handleCanvasClick = (event: MouseEvent) => {
       if (!vrm) return;
       if (canvasPointerDown) {
@@ -476,6 +485,10 @@ export default function VRMViewer({
     renderer.domElement.addEventListener("pointerdown", handleCanvasPointerDown);
     renderer.domElement.addEventListener("pointerleave", handleCanvasPointerLeave);
     renderer.domElement.addEventListener("click", handleCanvasClick);
+    renderer.domElement.addEventListener(
+      "dblclick",
+      handleCanvasDoubleClick,
+    );
 
     const updateCameraFraming = () => {
       if (modelWidth <= 0 || modelBaseCameraDistance <= 0) return;
@@ -1006,9 +1019,9 @@ export default function VRMViewer({
     };
 
     const unsubscribeKnock = window.sakuraDesktop?.onKnock?.(handleKnock);
-    window.addEventListener("fufuu:emotion", handleEmotion);
-    window.addEventListener("fufuu:gesture", handleGestureEvent);
-    window.addEventListener("fufuu:play-motion", handlePlayMotionEvent);
+    window.addEventListener("Lumi:emotion", handleEmotion);
+    window.addEventListener("Lumi:gesture", handleGestureEvent);
+    window.addEventListener("Lumi:play-motion", handlePlayMotionEvent);
 
     const loadMotion = async (definition: MotionDefinition) => {
       const url = new URL(definition.source, window.location.origin);
@@ -1782,7 +1795,7 @@ export default function VRMViewer({
             roamingEnabledRef.current && roamPhase !== "waiting"
               ? roamPhase
               : roamingEnabledRef.current
-                ? "enabled · waiting"
+                ? "enabled Â· waiting"
                 : "paused";
           const mixerDelta = rootXAfterMixer - rootXBeforeMixer;
           const mixerStatus =
@@ -1803,11 +1816,11 @@ export default function VRMViewer({
 
           if (roamDiagnosticsRef.current) {
             roamDiagnosticsRef.current.textContent =
-              `Behavior ${behaviorController.current} · roaming ${phase} · ` +
-              `motion ${activeMotion?.definition.id ?? "none"} · ` +
-              `root X ${rootXBeforeMixer.toFixed(3)} → mixer ${rootXAfterMixer.toFixed(3)} → ` +
-              `movement ${rootXAfterRoaming.toFixed(3)} · ` +
-              `${mixerStatus} · limit ±${maximumRoamOffset.toFixed(3)}`;
+              `Behavior ${behaviorController.current} Â· roaming ${phase} Â· ` +
+              `motion ${activeMotion?.definition.id ?? "none"} Â· ` +
+              `root X ${rootXBeforeMixer.toFixed(3)} â†’ mixer ${rootXAfterMixer.toFixed(3)} â†’ ` +
+              `movement ${rootXAfterRoaming.toFixed(3)} Â· ` +
+              `${mixerStatus} Â· limit Â±${maximumRoamOffset.toFixed(3)}`;
           }
         }
 
@@ -1896,11 +1909,15 @@ export default function VRMViewer({
         window.clearTimeout(knockPauseTimer);
         knockPauseTimer = null;
       }
-      window.removeEventListener("fufuu:emotion", handleEmotion);
-      window.removeEventListener("fufuu:gesture", handleGestureEvent);
-      window.removeEventListener("fufuu:play-motion", handlePlayMotionEvent);
+      window.removeEventListener("Lumi:emotion", handleEmotion);
+      window.removeEventListener("Lumi:gesture", handleGestureEvent);
+      window.removeEventListener("Lumi:play-motion", handlePlayMotionEvent);
       unsubscribeKnock?.();
       renderer.domElement.removeEventListener("click", handleCanvasClick);
+      renderer.domElement.removeEventListener(
+        "dblclick",
+        handleCanvasDoubleClick,
+      );
       renderer.domElement.removeEventListener("pointermove", updateCanvasPointer);
       renderer.domElement.removeEventListener("mousemove", updateCanvasPointer);
       renderer.domElement.removeEventListener(
@@ -1934,20 +1951,20 @@ export default function VRMViewer({
   }, []);
 
   const stateLabel = (item: MotionDebugItem) => {
-    if (item.state === "ready") return `Ready · ${item.trackCount} tracks`;
-    if (item.state === "partial") return `Partial · ${item.message}`;
-    if (item.state === "failed") return `Failed · ${item.message}`;
+    if (item.state === "ready") return `Ready Â· ${item.trackCount} tracks`;
+    if (item.state === "partial") return `Partial Â· ${item.message}`;
+    if (item.state === "failed") return `Failed Â· ${item.message}`;
     return item.message;
   };
 
   return (
     <div
-      className="fufuu-vrm-viewer"
+      className="Lumi-vrm-viewer"
       ref={hostRef}
       role={SHOW_MOTION_DEBUG ? undefined : "img"}
       aria-label={SHOW_MOTION_DEBUG ? undefined : "Furina 3D avatar"}
     >
-      <div className={`fufuu-vrm-status${failed ? " is-error" : ""}`}>
+      <div className={`Lumi-vrm-status${failed ? " is-error" : ""}`}>
         {status}
       </div>
       {SHOW_MOTION_DEBUG && (
@@ -2022,7 +2039,7 @@ export default function VRMViewer({
             disabled={failed}
             onClick={() =>
               window.dispatchEvent(
-                new CustomEvent("fufuu:play-motion", { detail: "idle" }),
+                new CustomEvent("Lumi:play-motion", { detail: "idle" }),
               )
             }
             style={{ display: "block", margin: "6px 0" }}
@@ -2040,7 +2057,7 @@ export default function VRMViewer({
                 }
                 onClick={() =>
                   window.dispatchEvent(
-                    new CustomEvent("fufuu:play-motion", {
+                    new CustomEvent("Lumi:play-motion", {
                       detail: item.id,
                     }),
                   )
@@ -2100,3 +2117,5 @@ export default function VRMViewer({
     </div>
   );
 }
+
+

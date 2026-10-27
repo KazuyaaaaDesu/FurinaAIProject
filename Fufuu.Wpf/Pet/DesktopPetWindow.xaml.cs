@@ -1,4 +1,4 @@
-
+﻿
 using System;
 using System.IO;
 using System.Linq;
@@ -53,12 +53,12 @@ public partial class DesktopPetWindow : Window
 
     private static readonly string DiagnosticLogPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Fufuu",
+        "Lumi",
         "desktop-pet-debug.log");
 
     private readonly string _settingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "Fufuu",
+        "Lumi",
         "desktop-pet.json");
 
     private DesktopStageSettings _settings;
@@ -251,7 +251,7 @@ public partial class DesktopPetWindow : Window
                 MessageBox.Show(
                     this,
                     message,
-                    "Fufuu Desktop Pet",
+                    "Lumi Desktop Pet",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
 
@@ -260,6 +260,13 @@ public partial class DesktopPetWindow : Window
             }
 
             await PetWebView.EnsureCoreWebView2Async();
+
+            var webFolder = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Web");
+            PetWebView.CoreWebView2.SetVirtualHostNameToFolderMapping(
+                "lumi.local",
+                webFolder,
+                Microsoft.Web.WebView2.Core.CoreWebView2HostResourceAccessKind.Allow
+            );
 
             if (_isClosing)
                 return;
@@ -327,11 +334,6 @@ public partial class DesktopPetWindow : Window
                     $"WEBVIEW PROCESS FAILED: {args.ProcessFailedKind}");
             };
 
-            core.SetVirtualHostNameToFolderMapping(
-                "fufuu.local",
-                webRoot,
-                CoreWebView2HostResourceAccessKind.Allow);
-
             core.WebMessageReceived += (_, args) =>
             {
                 try
@@ -370,7 +372,7 @@ public partial class DesktopPetWindow : Window
                 }
             };
 
-            var target = new Uri("https://fufuu.local/PetStage.html");
+            var target = new Uri("https://lumi.local/PetStage.html");
 
             LogDiagnostic($"Navigating to: {target}");
 
@@ -382,10 +384,10 @@ public partial class DesktopPetWindow : Window
 
             MessageBox.Show(
                 this,
-                "Couldn't initialize the Fufuu model surface:\n" +
+                "Couldn't initialize the Lumi character surface:\n" +
                 ex.Message +
                 "\n\nDiagnostic log:\n" + DiagnosticLogPath,
-                "Fufuu Desktop Pet",
+                "Lumi Desktop Pet",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
 
@@ -433,7 +435,7 @@ public partial class DesktopPetWindow : Window
                     {
                         var requestedMode = modeElement.GetString();
 
-                        if (!string.IsNullOrEmpty(requestedMode))
+                        if (requestedMode is "png" or "2d" or "3d")
                         {
                             LogDiagnostic($"Setting mode to: {requestedMode}");
                             SetMode(requestedMode);
@@ -500,9 +502,9 @@ public partial class DesktopPetWindow : Window
 
                             MessageBox.Show(
                                 this,
-                                "Fufuu couldn't open the chat window.\n\n" +
+                                "Lumi couldn't open the chat window.\n\n" +
                                 ex.Message,
-                                "Fufuu",
+                                "Lumi",
                                 MessageBoxButton.OK,
                                 MessageBoxImage.Error);
                         }
@@ -932,3 +934,4 @@ public partial class DesktopPetWindow : Window
         }
     }
 }
+

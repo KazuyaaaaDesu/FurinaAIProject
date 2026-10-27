@@ -1,13 +1,23 @@
-
-import { useCallback, useEffect, useState } from "react";
+﻿
+import { useCallback, useEffect, useRef, useState } from "react";
 import Live2DViewer from "./Live2DViewer";
-import VRMViewer from "./VRMViewer";
+import SpriteViewer from "./SpriteViewer";
+
+// TEMPORARILY DISABLED:
+// To restore 3D later:
+// 1. Uncomment the VRMViewer import below.
+// 2. Restore "3d" in the StageSettings displayMode type.
+// 3. Restore "3d" mode validation in the settings receiver.
+// 4. Restore the three-mode toggle cycle in the message handler.
+// 5. Restore the VRMViewer rendering branch below.
+// 6. Re-enable the 3D option in the WPF toolbar.
+// import VRMViewer from "./VRMViewer";
+
 import type { CharacterScreenGeometry } from "./desktopStage";
-import type { PersonalityMode } from "./fufuuPersonality";
 import "./PetStageHost.css";
 
 type StageSettings = {
-  displayMode: "2d" | "3d";
+  displayMode: "png" | "2d";
   characterScale: number;
   characterX: number;
   characterY: number;
@@ -17,7 +27,7 @@ type StageSettings = {
 };
 
 const defaults: StageSettings = {
-  displayMode: "2d",
+  displayMode: "png",
   characterScale: 1,
   characterX: 0,
   characterY: 0,
@@ -26,7 +36,7 @@ const defaults: StageSettings = {
   roamingEnabled: false,
 };
 
-type FufuuEmotion =
+type LumiEmotion =
   | "neutral"
   | "happy"
   | "pout"
@@ -53,13 +63,16 @@ declare global {
   }
 }
 
-function post(type: string, extra: Record<string, unknown> = {}) {
+function post(
+  type: string,
+  extra: Record<string, unknown> = {},
+) {
   window.chrome?.webview?.postMessage(
     JSON.stringify({ type, ...extra }),
   );
 }
 
-function isFufuuEmotion(value: unknown): value is FufuuEmotion {
+function isLumiEmotion(value: unknown): value is LumiEmotion {
   return (
     typeof value === "string" &&
     [
@@ -76,11 +89,11 @@ function isFufuuEmotion(value: unknown): value is FufuuEmotion {
 
 function detectSpeechEmotion(
   message: Record<string, unknown>,
-): FufuuEmotion {
+): LumiEmotion {
   const explicitEmotion = message.emotion;
 
-  if (isFufuuEmotion(explicitEmotion)) {
-    return explicitEmotion.toLowerCase() as FufuuEmotion;
+  if (isLumiEmotion(explicitEmotion)) {
+    return explicitEmotion.toLowerCase() as LumiEmotion;
   }
 
   const text = String(message.text ?? "").toLowerCase();
@@ -151,16 +164,19 @@ export default function PetStageHost() {
   const [settings, setSettings] =
     useState<StageSettings>(defaults);
 
-  const [status, setStatus] = useState("Loading Fufuu…");
+  const displayModeRef =
+    useRef<StageSettings["displayMode"]>("png");
+
+  // Force PNG only on the first settings message.
+  const initialSettingsReceived = useRef(false);
+
+  const [status, setStatus] = useState("Loading Lumi...");
   const [speechText, setSpeechText] = useState<string | null>(null);
-  const [personalityMode] =
-    useState<PersonalityMode>("balanced");
 
   const toggleToolbar = useCallback(() => {
     post("open-control-menu");
   }, []);
 
-  // Receive WPF/WebView2 messages.
   useEffect(() => {
     let bubbleTimeout: ReturnType<typeof setTimeout> | undefined;
 
@@ -195,17 +211,51 @@ export default function PetStageHost() {
       const data = message as Record<string, unknown>;
 
       if (data.type === "settings" && data.settings) {
-        const incoming = data.settings as Partial<StageSettings>;
+        const incoming =
+          data.settings as Partial<StageSettings>;
 
-        setSettings({
+        const requestedMode: StageSettings["displayMode"] =
+          incoming.displayMode === "2d" ? "2d" : "png";
+
+        // PNG is the initial mode, regardless of the saved mode.
+        // Subsequent settings updates can select PNG or Live2D.
+        const displayMode = initialSettingsReceived.current
+          ? requestedMode
+          : "png";
+
+        initialSettingsReceived.current = true;
+        displayModeRef.current = displayMode;
+
+        setSettings((current) => ({
+          ...current,
           ...defaults,
           ...incoming,
-          displayMode: incoming.displayMode === "3d" ? "3d" : "2d",
-        });
+          displayMode,
+        }));
+
+        // Tell WPF that PNG was selected for initial startup.
+        if (displayMode !== requestedMode) {
+          post("set-mode", { mode: "png" });
+        }
+      }
+
+      if (data.type === "toggle-display-mode") {
+        // TEMPORARY TWO-MODE CYCLE: PNG <-> Live2D.
+        const nextMode: StageSettings["displayMode"] =
+          displayModeRef.current === "png" ? "2d" : "png";
+
+        displayModeRef.current = nextMode;
+
+        setSettings((current) => ({
+          ...current,
+          displayMode: nextMode,
+        }));
+
+        post("set-mode", { mode: nextMode });
       }
 
       if (data.type === "behavior") {
-        setStatus(`Fufuu · ${String(data.behavior)}`);
+        setStatus(`Lumi · ${String(data.behavior)}`);
       }
 
       if (
@@ -213,7 +263,7 @@ export default function PetStageHost() {
         typeof data.motionId === "string"
       ) {
         window.dispatchEvent(
-          new CustomEvent("fufuu:play-motion", {
+          new CustomEvent("lumi:play-motion", {
             detail: data.motionId,
           }),
         );
@@ -235,12 +285,12 @@ export default function PetStageHost() {
         const mood = detectSpeechEmotion(data);
 
         window.dispatchEvent(
-          new CustomEvent("fufuu:set-expression", {
+          new CustomEvent("lumi:set-expression", {
             detail: mood,
           }),
         );
 
-        console.info("[Fufuu] Speech mood:", mood);
+        console.info("[Lumi] Speech mood:", mood);
       }
     };
 
@@ -263,10 +313,8 @@ export default function PetStageHost() {
     };
   }, []);
 
-  // Single-click only sends the pet reaction message.
   const clicked = (_geometry: CharacterScreenGeometry) => {
     post("pet-click");
-    // Do NOT call toggleToolbar() or open any menu here!
   };
 
   const geometryChanged = useCallback(
@@ -283,18 +331,10 @@ export default function PetStageHost() {
     [],
   );
 
-  const characterSettings = {
-    characterScale: settings.characterScale,
-    characterX: settings.characterX,
-    characterY: settings.characterY,
-    facingDegrees: settings.facingDegrees,
-    walkingSpeed: settings.walkingSpeed,
-  };
-
   return (
     <main
       className="pet-stage"
-      aria-label="Fufuu desktop pet"
+      aria-label="Lumi desktop pet"
       style={{
         pointerEvents: "none",
         width: "100%",
@@ -330,15 +370,12 @@ export default function PetStageHost() {
         </div>
       )}
 
-      {settings.displayMode === "3d" ? (
-        <VRMViewer
-          roamingEnabled={settings.roamingEnabled}
-          autonomousBehaviorEnabled={false}
-          personalityMode={personalityMode}
+      {settings.displayMode === "png" ? (
+        <SpriteViewer
+          characterScale={settings.characterScale}
           onPetClick={clicked}
           onPointerInteractive={pointerInteractive}
           onCharacterGeometryChange={geometryChanged}
-          characterSettings={characterSettings}
         />
       ) : (
         <Live2DViewer
@@ -348,6 +385,17 @@ export default function PetStageHost() {
           onCharacterGeometryChange={geometryChanged}
         />
       )}
+
+      {/*
+        TO RESTORE 3D LATER:
+        1. Uncomment the VRMViewer import.
+        2. Add "3d" to StageSettings.displayMode.
+        3. Restore 3D settings validation.
+        4. Restore the three-mode toggle cycle.
+        5. Restore the VRMViewer rendering branch.
+        6. Re-enable the WPF toolbar's 3D option.
+        7. Rebuild the React assets used by WebView2.
+      */}
     </main>
   );
 }

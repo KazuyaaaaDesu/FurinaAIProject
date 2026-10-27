@@ -1,4 +1,4 @@
-/** Lightweight, offline personality decisions for Fufuu's autonomous gestures. */
+/** Lightweight, offline personality decisions for Lumi's autonomous gestures. */
 export type PersonalityMode = "chill" | "balanced" | "hyper";
 export type PersonalityMood = "happy" | "curious" | "sleepy" | "playful" | "focused" | "calm";
 

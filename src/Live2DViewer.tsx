@@ -7,10 +7,10 @@ import "./Live2DViewer.css";
 
 Live2DModel.registerTicker(PIXI.Ticker);
 
-const MODEL_URL = "/models/furina-live2d/Furina.model3.json";
-const EMOTION_CHANNEL = "fufuu-avatar-emotion";
+const MODEL_URL = new URL("/models/furina-live2d/Furina.model3.json", window.location.origin).href;
+const EMOTION_CHANNEL = "lumi-avatar-emotion";
 
-type FufuuEmotion =
+type LumiEmotion =
   | "neutral"
   | "happy"
   | "pout"
@@ -19,7 +19,7 @@ type FufuuEmotion =
   | "surprised"
   | "sparkle";
 
-const EMOTION_INDEX: Record<FufuuEmotion, number> = {
+const EMOTION_INDEX: Record<LumiEmotion, number> = {
   neutral: 0,
   happy: 1,
   pout: 2,
@@ -29,7 +29,7 @@ const EMOTION_INDEX: Record<FufuuEmotion, number> = {
   sparkle: 6,
 };
 
-const INDEX_EMOTION: FufuuEmotion[] = [
+const INDEX_EMOTION: LumiEmotion[] = [
   "neutral",
   "happy",
   "pout",
@@ -77,7 +77,7 @@ function getExpressionFile(
   return expression.File ?? expression.file;
 }
 
-function isFufuuEmotion(value: unknown): value is FufuuEmotion {
+function isLumiEmotion(value: unknown): value is LumiEmotion {
   return (
     typeof value === "string" &&
     Object.prototype.hasOwnProperty.call(
@@ -122,9 +122,7 @@ function setParameter(
       value,
       weight,
     );
-  } catch {
-    // Some models do not expose every optional parameter.
-  }
+  } catch (err) { console.error("[Live2D Error] Failed to load model:", err); }
 }
 
 function Live2DViewer({
@@ -168,8 +166,8 @@ function Live2DViewer({
 
       if (typeof detail === "number" && Number.isInteger(detail)) {
         index = detail;
-      } else if (isFufuuEmotion(detail)) {
-        index = EMOTION_INDEX[detail.toLowerCase() as FufuuEmotion];
+      } else if (isLumiEmotion(detail)) {
+        index = EMOTION_INDEX[detail.toLowerCase() as LumiEmotion];
       }
 
       if (
@@ -178,7 +176,7 @@ function Live2DViewer({
         index >= INDEX_EMOTION.length
       ) {
         console.warn(
-          "[Fufuu Live2D] Invalid expression:",
+          "[Lumi Live2D] Invalid expression:",
           detail,
         );
         return;
@@ -190,17 +188,17 @@ function Live2DViewer({
         activate(index);
       } else {
         console.debug(
-          "[Fufuu Live2D] Expression requested before model is ready:",
+          "[Lumi Live2D] Expression requested before model is ready:",
           detail,
         );
       }
     };
 
-    window.addEventListener("fufuu:set-expression", handleExpression);
+    window.addEventListener("Lumi:set-expression", handleExpression);
 
     return () => {
       window.removeEventListener(
-        "fufuu:set-expression",
+        "Lumi:set-expression",
         handleExpression,
       );
     };
@@ -309,7 +307,7 @@ function Live2DViewer({
 
       if (expressions.length === 0) {
         console.warn(
-          "[Fufuu Live2D] This model has no configured expressions.",
+          "[Lumi Live2D] This model has no configured expressions.",
         );
         return;
       }
@@ -318,7 +316,7 @@ function Live2DViewer({
 
       if (!expression) {
         console.warn(
-          `[Fufuu Live2D] Expression index ${index} does not exist. ` +
+          `[Lumi Live2D] Expression index ${index} does not exist. ` +
             `Model contains ${expressions.length} expressions.`,
         );
         return;
@@ -335,12 +333,12 @@ function Live2DViewer({
         }
 
         console.info(
-          "[Fufuu Live2D] Expression activated:",
+          "[Lumi Live2D] Expression activated:",
           expressionName ?? expressionFile ?? index,
         );
       } catch (expressionError) {
         console.error(
-          "[Fufuu Live2D] Failed to activate expression:",
+          "[Lumi Live2D] Failed to activate expression:",
           expressionError,
         );
       }
@@ -369,7 +367,7 @@ function Live2DViewer({
         }
       } catch (motionError) {
         console.warn(
-          "[Fufuu Live2D] Could not play motion:",
+          "[Lumi Live2D] Could not play motion:",
           motionId,
           motionError,
         );
@@ -497,9 +495,9 @@ function Live2DViewer({
         emotion = data.emotion ?? data.mood;
       }
 
-      if (isFufuuEmotion(emotion)) {
+      if (isLumiEmotion(emotion)) {
         activateExpression(
-          EMOTION_INDEX[emotion.toLowerCase() as FufuuEmotion],
+          EMOTION_INDEX[emotion.toLowerCase() as LumiEmotion],
         );
       }
     };
@@ -575,7 +573,7 @@ function Live2DViewer({
         window.addEventListener("keydown", handleKeyDown);
         window.addEventListener("message", handleHostMessage);
         window.addEventListener(
-          "fufuu:play-motion",
+          "Lumi:play-motion",
           handleMotionEvent,
         );
 
@@ -589,7 +587,7 @@ function Live2DViewer({
           emotionChannel = null;
         }
 
-        setStatus("Fufuu is ready");
+        setStatus("Lumi is ready");
         window.setTimeout(() => {
           if (!cancelled) {
             setStatus("");
@@ -609,7 +607,7 @@ function Live2DViewer({
         }
 
         console.error(
-          "[Fufuu Live2D] Model loading failed:",
+          "[Lumi Live2D] Model loading failed:",
           loadError,
         );
 
@@ -634,7 +632,7 @@ function Live2DViewer({
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("message", handleHostMessage);
       window.removeEventListener(
-        "fufuu:play-motion",
+        "Lumi:play-motion",
         handleMotionEvent,
       );
 
@@ -654,7 +652,7 @@ function Live2DViewer({
           model.destroy();
         } catch (destroyError) {
           console.warn(
-            "[Fufuu Live2D] Model cleanup warning:",
+            "[Lumi Live2D] Model cleanup warning:",
             destroyError,
           );
         }
@@ -665,7 +663,7 @@ function Live2DViewer({
           app.destroy(true);
         } catch (destroyError) {
           console.warn(
-            "[Fufuu Live2D] PIXI cleanup warning:",
+            "[Lumi Live2D] PIXI cleanup warning:",
             destroyError,
           );
         }
@@ -679,20 +677,20 @@ function Live2DViewer({
   }, []);
 
   return (
-    <div className="fufuu-live2d-viewer">
+    <div className="Lumi-live2d-viewer">
       <div
         ref={canvasHostRef}
-        className="fufuu-live2d-canvas-host"
+        className="Lumi-live2d-canvas-host"
       />
 
       {status && (
-        <div className="fufuu-live2d-status">
+        <div className="Lumi-live2d-status">
           {status}
         </div>
       )}
 
       {error && (
-        <div className="fufuu-live2d-error" role="alert">
+        <div className="Lumi-live2d-error" role="alert">
           {error}
         </div>
       )}
@@ -701,3 +699,8 @@ function Live2DViewer({
 }
 
 export default memo(Live2DViewer);
+
+
+
+
+

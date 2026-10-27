@@ -110,3 +110,11 @@ body:has(.speech-bubble-window),
   overflow: hidden;
   background: transparent !important;
 }
+
+
+/* Ensure text doesn't fall off or overflow */
+.speech-bubble, .speech-bubble * {
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    max-width: 100%;
+}

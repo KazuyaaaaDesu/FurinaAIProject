@@ -1,4 +1,4 @@
-
+﻿
 import { useEffect, useState } from "react";
 import "./SpeechBubble.css";
 
@@ -24,7 +24,7 @@ export default function SpeechBubble() {
         if (state?.text) setText(state.text);
       })
       .catch((error) => {
-        console.warn("[Fufuu] Couldn't load speech-bubble state:", error);
+        console.warn("[Lumi] Couldn't load speech-bubble state:", error);
       });
 
     return () => unsubscribe?.();
@@ -34,9 +34,9 @@ export default function SpeechBubble() {
     <main className="speech-bubble-window">
       <section className="speech-bubble-card">
         <header className="speech-bubble-header">
-          <span className="speech-bubble-flower" aria-hidden="true">🌸</span>
-          <span className="speech-bubble-name">Fufuu</span>
-          <span className="speech-bubble-drag-hint">✦</span>
+          <span className="speech-bubble-flower" aria-hidden="true">ðŸŒ¸</span>
+          <span className="speech-bubble-name">Lumi</span>
+          <span className="speech-bubble-drag-hint">âœ¦</span>
           <button
             type="button"
             className="speech-bubble-hide"
@@ -44,12 +44,12 @@ export default function SpeechBubble() {
             aria-label="Hide speech bubble"
             title="Hide speech bubble"
           >
-            ×
+            Ã—
           </button>
         </header>
 
         <div className="speech-bubble-content" aria-live="polite">
-          {text || "…"}
+          {text || "â€¦"}
         </div>
 
         <span className="speech-bubble-tail" aria-hidden="true" />
@@ -57,3 +57,4 @@ export default function SpeechBubble() {
     </main>
   );
 }
+

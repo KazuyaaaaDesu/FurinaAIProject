@@ -95,7 +95,7 @@ public partial class MainWindow : Window
 
     private const string VisionSystemPrompt =
         """
-        You are Fufuu, analyzing a screenshot supplied by the user.
+        You are Lumi, analyzing a screenshot supplied by the user.
 
         Use only evidence visible in the screenshot. Answer the user's actual
         question, and read visible error messages when possible.
@@ -108,7 +108,7 @@ public partial class MainWindow : Window
 
     private const string AmbientSystemPrompt =
         """
-        You are Fufuu, a local AI companion that can occasionally notice
+        You are Lumi, a local AI companion that can occasionally notice
         something relevant on the user's desktop.
 
         Examine the screenshot and decide whether there is a clear,
@@ -213,7 +213,7 @@ public partial class MainWindow : Window
                 FooterStatus.Text = "Voice error: " + ex.Message;
 
                 System.Diagnostics.Debug.WriteLine(
-                    $"Fufuu voice failed: {ex}");
+                    $"Lumi voice failed: {ex}");
             }
         }
     }
@@ -254,19 +254,19 @@ public partial class MainWindow : Window
             MessageBox.Show(
                 $"Personality file not found:\n{path}\n\n" +
                 "Using fallback prompt.",
-                "Fufuu Personality");
+                "Lumi Personality");
         }
         catch (Exception ex)
         {
             MessageBox.Show(
                 $"Couldn't read Personality.md:\n{ex.Message}\n\n" +
                 "Using fallback prompt.",
-                "Fufuu Personality");
+                "Lumi Personality");
         }
 
         return
-            "You are Fufuu, a warm, playful local AI companion. " +
-            "Speak naturally in first person as Fufuu. " +
+            "You are Lumi, a warm, playful local AI companion. " +
+            "Speak naturally in first person as Lumi. " +
             "Be kind, playful, and respect the user's privacy. " +
             "Do not claim to have performed actions you have not performed.";
     }
@@ -305,7 +305,7 @@ public partial class MainWindow : Window
             _savedMemories = new();
 
             System.Diagnostics.Debug.WriteLine(
-                $"Fufuu memory load failed: {ex.Message}");
+                $"Lumi memory load failed: {ex.Message}");
 
             FooterStatus.Text =
                 "Memory unavailable; continuing without saved memories.";
@@ -456,7 +456,7 @@ public partial class MainWindow : Window
                 else if (role == "assistant")
                 {
                     AddMessageBubble(
-                        "Fufuu",
+                        "Lumi",
                         content,
                         isUser: false);
                 }
@@ -478,7 +478,7 @@ public partial class MainWindow : Window
                 "History wasn't loaded. Saved history is protected.";
 
             MessageBox.Show(
-                "Fufuu couldn't load the existing conversation. Saving " +
+                "Lumi couldn't load the existing conversation. Saving " +
                 "to it has been disabled for this session.\n\n" +
                 ex.Message,
                 "Conversation History");
@@ -604,7 +604,7 @@ public partial class MainWindow : Window
                 "Screen capture failed: " + ex.Message;
 
             MessageBox.Show(
-                "Fufuu couldn't capture the primary screen.\n\n" +
+                "Lumi couldn't capture the primary screen.\n\n" +
                 ex.Message,
                 "Screen Capture",
                 MessageBoxButton.OK,
@@ -906,7 +906,7 @@ public partial class MainWindow : Window
                     _messages.Add(
                         new ChatMessage("assistant", remark));
                     AddMessageBubble(
-                        "Fufuu",
+                        "Lumi",
                         remark,
                         isUser: false);
 
@@ -1089,7 +1089,7 @@ public partial class MainWindow : Window
             (!_historyLoaded || _historyLoadFailed))
         {
             MessageBox.Show(
-                "Saved history isn't loaded, so Fufuu won't send messages " +
+                "Saved history isn't loaded, so Lumi won't send messages " +
                 "to that conversation. Use New Chat for a temporary session.",
                 "History Unavailable");
 
@@ -1106,8 +1106,8 @@ public partial class MainWindow : Window
         MessageInput.Clear();
 
         FooterStatus.Text = screenshot is null
-            ? "Fufuu is thinking�"
-            : "Fufuu is analyzing your screenshot�";
+            ? "Lumi is thinking�"
+            : "Lumi is analyzing your screenshot�";
 
         _messages.Add(new ChatMessage("user", text));
 
@@ -1128,7 +1128,7 @@ public partial class MainWindow : Window
             await SaveMessageAsync("user", text);
 
             replyBlock = AddMessageBubble(
-                "Fufuu",
+                "Lumi",
                 "�",
                 isUser: false);
 
@@ -1273,7 +1273,7 @@ public partial class MainWindow : Window
                 ? $"Temporary chat � {_savedMemories.Count} memories loaded"
                 : $"History saved � {_savedMemories.Count} memories loaded";
 
-            // Display Fufuu's reply in the floating desktop pet's speech bubble.
+            // Display Lumi's reply in the floating desktop pet's speech bubble.
             DesktopPetWindow.Instance?.SpeakSequence(finalReply, 5000);
 
             // Play audio only when the Piper voice toggle is enabled.
@@ -1418,7 +1418,7 @@ public partial class MainWindow : Window
         MessagesPanel.Children.Clear();
 
         AddMessageBubble(
-            "Fufuu",
+            "Lumi",
             "Oh? You're here. What is it? ?",
             isUser: false);
 
