@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+
+import { useCallback, useEffect, useState } from "react";
 import Live2DViewer from "./Live2DViewer";
 import VRMViewer from "./VRMViewer";
 import type { CharacterScreenGeometry } from "./desktopStage";
@@ -34,15 +35,6 @@ type FufuuEmotion =
   | "surprised"
   | "sparkle";
 
-function post(
-  type: string,
-  extra: Record<string, unknown> = {},
-) {
-  window.chrome?.webview?.postMessage(
-    JSON.stringify({ type, ...extra }),
-  );
-}
-
 declare global {
   interface Window {
     chrome?: {
@@ -59,6 +51,12 @@ declare global {
       };
     };
   }
+}
+
+function post(type: string, extra: Record<string, unknown> = {}) {
+  window.chrome?.webview?.postMessage(
+    JSON.stringify({ type, ...extra }),
+  );
 }
 
 function isFufuuEmotion(value: unknown): value is FufuuEmotion {
@@ -109,11 +107,11 @@ function detectSpeechEmotion(
   }
 
   if (
-    text.includes("hm") ||
-    text.includes("mph") ||
-    text.includes("hrph") ||
     text.includes("hmph") ||
-    text.includes("grr")
+    text.includes("hrph") ||
+    text.includes("mph") ||
+    text.includes("grr") ||
+    text.includes("hm")
   ) {
     return "pout";
   }
@@ -154,42 +152,19 @@ export default function PetStageHost() {
     useState<StageSettings>(defaults);
 
   const [status, setStatus] = useState("Loading Fufuu…");
-
-  // Speech bubble state.
-  const [speechText, setSpeechText] =
-    useState<string | null>(null);
-
-  const [personalityMode, _setPersonalityMode] =
+  const [speechText, setSpeechText] = useState<string | null>(null);
+  const [personalityMode] =
     useState<PersonalityMode>("balanced");
 
-  // Keyboard shortcut: Ctrl + Alt + T opens the native control window.
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.ctrlKey &&
-        event.altKey &&
-        event.key.toLowerCase() === "t"
-      ) {
-        event.preventDefault();
-        toggleToolbar();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
+  const toggleToolbar = useCallback(() => {
+    post("open-control-menu");
   }, []);
 
-  // Receive messages from the WPF/WebView2 host.
+  // Receive WPF/WebView2 messages.
   useEffect(() => {
     let bubbleTimeout: ReturnType<typeof setTimeout> | undefined;
 
-    const showSpeech = (
-      text: string,
-      durationMs = 4000,
-    ) => {
+    const showSpeech = (text: string, durationMs = 4000) => {
       setSpeechText(text);
 
       if (bubbleTimeout !== undefined) {
@@ -198,6 +173,7 @@ export default function PetStageHost() {
 
       bubbleTimeout = setTimeout(() => {
         setSpeechText(null);
+        bubbleTimeout = undefined;
       }, durationMs);
     };
 
@@ -219,12 +195,13 @@ export default function PetStageHost() {
       const data = message as Record<string, unknown>;
 
       if (data.type === "settings" && data.settings) {
-        const next = {
-          ...defaults,
-          ...(data.settings as Partial<StageSettings>),
-        } as StageSettings;
+        const incoming = data.settings as Partial<StageSettings>;
 
-        setSettings(next);
+        setSettings({
+          ...defaults,
+          ...incoming,
+          displayMode: incoming.displayMode === "3d" ? "3d" : "2d",
+        });
       }
 
       if (data.type === "behavior") {
@@ -242,7 +219,6 @@ export default function PetStageHost() {
         );
       }
 
-      // Show speech and automatically change Fufuu's expression.
       if (
         data.type === "speak" &&
         typeof data.text === "string"
@@ -287,22 +263,25 @@ export default function PetStageHost() {
     };
   }, []);
 
-  const geometryChanged = (
-    _geometry: CharacterScreenGeometry | null,
-  ) => {};
-
+  // Single-click only sends the pet reaction message.
   const clicked = (_geometry: CharacterScreenGeometry) => {
     post("pet-click");
-    toggleToolbar();
+    // Do NOT call toggleToolbar() or open any menu here!
   };
 
-  const pointerInteractive = (_interactive: boolean) => {};
+  const geometryChanged = useCallback(
+    (_geometry: CharacterScreenGeometry | null) => {
+      // Reserved for character geometry updates.
+    },
+    [],
+  );
 
-  function toggleToolbar() {
-    if (typeof window.chrome?.webview?.postMessage === "function") {
-      window.chrome.webview.postMessage(JSON.stringify({ type: "open-control-menu" }));
-    }
-  }
+  const pointerInteractive = useCallback(
+    (_interactive: boolean) => {
+      // Reserved for native click-through state updates.
+    },
+    [],
+  );
 
   const characterSettings = {
     characterScale: settings.characterScale,
@@ -327,22 +306,12 @@ export default function PetStageHost() {
 
         if (
           target instanceof Element &&
-          target.closest(
-            "button, input, select, textarea",
-          )
+          target.closest("button, input, select, textarea")
         ) {
           return;
         }
 
         toggleToolbar();
-      }}
-      onPointerDown={(event) => {
-        if (
-          event.target === event.currentTarget &&
-          event.button === 0
-        ) {
-          post("drag-start");
-        }
       }}
     >
       <div
@@ -352,7 +321,6 @@ export default function PetStageHost() {
         {status}
       </div>
 
-      {/* Speech bubble overlay */}
       {speechText && (
         <div
           className="speech-bubble-container"
@@ -362,7 +330,6 @@ export default function PetStageHost() {
         </div>
       )}
 
-      {/* Character renderer */}
       {settings.displayMode === "3d" ? (
         <VRMViewer
           roamingEnabled={settings.roamingEnabled}

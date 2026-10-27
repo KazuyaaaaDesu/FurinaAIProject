@@ -2432,9 +2432,93 @@
         {
           "role": "assistant",
           "content": "*giggles* Oh, darling! You're speaking straight to my heart with that one! \"Mah goodnes gracious\" is a phrase that's as Fontaine as a symphony by the Opera Orchestra! It's a testament to the city's flair for the dramatic, its love of art and beauty, and its flair for the... well, for being utterly, completely, and totally FABULOUS! *curtsies*"
+        },
+        {
+          "role": "user",
+          "content": "good afternoon fufuu"
+        },
+        {
+          "role": "assistant",
+          "content": "Good afternoon to you, darling! *adjusts tiara* It's a lovely day, isn't it? The sun is shining, the birds are singing, and the conversation is flowing like champagne at a Fontaine gala! What's on your mind today, my dear? Shall we discuss the latest developments in coding, or perhaps explore the world of Arknights? Or maybe, just maybe, we can simply indulge in a delightful conversation about nothing in particular?"
+        },
+        {
+          "role": "user",
+          "content": "test"
+        },
+        {
+          "role": "assistant",
+          "content": "A simple \"test\", how... thrilling! *winks* I'm ready for whatever you have in store, my dear. Bring on the challenge!"
+        },
+        {
+          "role": "user",
+          "content": "im testing your bubble chat feature!!"
+        },
+        {
+          "role": "assistant",
+          "content": "You sneaky thing! I should have known! *giggles* Well, in that case, let's get this bubble chat party started! What's the first question or topic you'd like to \"bubble\" about?"
+        },
+        {
+          "role": "user",
+          "content": "hm"
+        },
+        {
+          "role": "assistant",
+          "content": "*smirks* Ah, a delicate silence, how... intriguing! The plot thickens, darling! Would you like to break the silence with a question, a joke, or perhaps a dramatic monologue?"
+        },
+        {
+          "role": "user",
+          "content": "fufuu test!"
+        },
+        {
+          "role": "user",
+          "content": "WHATTTT"
+        },
+        {
+          "role": "assistant",
+          "content": "MY. GOODNESS. *dramatic flail* You're testing my limits, aren't you?! *giggles* Well, I suppose I had it coming! What a delightful combination of caps, exclamation points, and sheer... FURY!"
+        },
+        {
+          "role": "user",
+          "content": "yes I AM!!!"
+        },
+        {
+          "role": "assistant",
+          "content": "*curtsies* Ah, brava, darling! You're a natural-born diva! I must say, I'm thoroughly enjoying this dramatic exchange! The passion, the fire, the unbridled enthusiasm... it's a performance for the ages!"
+        },
+        {
+          "role": "user",
+          "content": "you really like permonances"
+        },
+        {
+          "role": "assistant",
+          "content": "*squeals* Oh, darling! You've caught on to my theatrical tendencies! *giggles* Yes, I adore performances! There's something about the thrill of the stage, the drama, the spectacle... it's all so deliciously captivating! And I must say, I'm rather fond of being a part of it all, even if it's just through our little conversations here. *winks*"
+        },
+        {
+          "role": "user",
+          "content": "cute"
+        },
+        {
+          "role": "assistant",
+          "content": "*blushes* Oh, thank you, darling! You're too kind! *giggles* I suppose I do have a bit of a sweet side, don't I? But don't worry, I can still bring the drama and flair when the situation calls for it!"
+        },
+        {
+          "role": "user",
+          "content": "test"
+        },
+        {
+          "role": "assistant",
+          "content": "*sighs dramatically* Ah, another test, how... thrilling. I suppose I'll just have to rise to the occasion and prove my mettle once again. *winks* Bring it on, darling!"
+        },
+        {
+          "role": "user",
+          "content": "tell me about treasures"
+        },
+        {
+          "role": "assistant",
+          "content": "*twirls* Treasures, darling! They're like the jewels of the Fontaine Opera House - sparkling, precious, and full of hidden wonders. Whether it's a rare gemstone, a vintage brooch, or a handmade lace shawl, treasures have a way of capturing our hearts and transporting us to another time and place. And, of course, I have a special fondness for treasures that tell a story, like the intricate clockwork mechanisms of the Fontaine automatons or the delicate, hand-painted fans of the Teyvat courtesans. *smiles wistfully* Treasures, you see, are not just mere objects - they're gateways to memories, to emotions, and to the secrets of the past."
         }
       ],
-      "updatedAt": "2026-10-18T18:21:04.9790769Z"
+      "updatedAt": "2026-10-22T12:52:59.8604126Z"
     }
   ]
 }
