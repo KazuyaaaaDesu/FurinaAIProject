@@ -9,7 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Content Include="Assets\Personality.md" CopyToOutputDirectory="PreserveNewest" />
-    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3595.46" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" />
   </ItemGroup>
   <!-- Run npm run build before building WPF. The Vite output is copied to the Web subfolder. -->
   <ItemGroup Condition="Exists('..\dist\PetStage.html')">
