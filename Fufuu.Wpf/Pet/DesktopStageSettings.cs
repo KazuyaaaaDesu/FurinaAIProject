@@ -18,6 +18,8 @@ public sealed record DesktopStageSettings
     public bool RoamingEnabled { get; init; }
     public bool AlwaysOnTop { get; init; } = true;
     public bool EdgeHideEnabled { get; init; }
+    public bool ClickThroughEnabled { get; init; }
+    public bool MouseAvoidanceEnabled { get; init; }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     public static DesktopStageSettings Defaults { get; } = new();
@@ -28,20 +30,12 @@ public sealed record DesktopStageSettings
         {
             if (!File.Exists(path)) return Defaults;
             var value = JsonSerializer.Deserialize<DesktopStageSettings>(File.ReadAllText(path), JsonOptions);
-            if (value is null || !value.IsValid())
-                return Defaults;
-
-            // One-time migration from the older Live2D-default renderer.
+            if (value is null || !value.IsValid()) return Defaults;
             if (value.RendererModeVersion is null)
             {
-                value = value with
-                {
-                    DisplayMode = "png",
-                    RendererModeVersion = 1
-                };
+                value = value with { DisplayMode = "png", RendererModeVersion = 1 };
                 value.Save(path);
             }
-
             return value;
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
@@ -65,8 +59,7 @@ public sealed record DesktopStageSettings
     }
 
     public static IReadOnlyList<DisplayInfo> GetDisplays() =>
-        Screen.AllScreens.Select((screen, index) => new DisplayInfo(
-            index, screen.DeviceName, ToRect(screen.Bounds), ToRect(screen.WorkingArea), screen.Primary)).ToArray();
+        Screen.AllScreens.Select((screen, index) => new DisplayInfo(index, screen.DeviceName, ToRect(screen.Bounds), ToRect(screen.WorkingArea), screen.Primary)).ToArray();
 
     private static Rect ToRect(System.Drawing.Rectangle r) => new(r.X, r.Y, r.Width, r.Height);
 }

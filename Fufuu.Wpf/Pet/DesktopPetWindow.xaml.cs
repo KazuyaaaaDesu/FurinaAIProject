@@ -30,16 +30,43 @@ public partial class DesktopPetWindow : Window
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private const int HotKeyId = 9000;
+    private const int ClickThroughHotKeyId = 9001;
     private const int WmHotKey = 0x0312;
 
     private const uint ModAlt = 0x0001;
     private const uint ModControl = 0x0002;
     private const uint ModifierCtrlAlt = ModControl | ModAlt;
     private const uint KeyT = 0x54;
+    private const uint KeyI = 0x49;
+
+    private const int GwlExStyle = -20;
+    private const int WsExTransparent = 0x00000020;
+    private const int WsExLayered = 0x00080000;
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
+    private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLong", SetLastError = true)]
+    private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+    private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr", SetLastError = true)]
+    private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+
+    private static IntPtr GetWindowLongPtr(IntPtr hwnd, int index) => IntPtr.Size == 8
+        ? GetWindowLongPtr64(hwnd, index) : new IntPtr(GetWindowLong32(hwnd, index));
+
+    private static IntPtr SetWindowLongPtr(IntPtr hwnd, int index, IntPtr value) => IntPtr.Size == 8
+        ? SetWindowLongPtr64(hwnd, index, value) : new IntPtr(SetWindowLong32(hwnd, index, value.ToInt32()));
 
     private IntPtr _windowHandle;
     private HwndSource? _source;
     private bool _hotkeyRegistered;
+    private bool _clickThroughHotkeyRegistered;
+    private bool _hiddenForMouseAvoidance;
+    private bool _applyingVisibility;
 
     private static readonly JsonSerializerOptions WebJsonOptions =
         new(JsonSerializerDefaults.Web);
@@ -120,11 +147,12 @@ public partial class DesktopPetWindow : Window
 
         _roamTimer.Tick += (_, _) =>
         {
-            if (_isClosing || !IsVisible)
+            if (_isClosing || (!IsVisible && !_hiddenForMouseAvoidance))
                 return;
 
             MoveAlongWorkArea();
             PollGlobalMouse();
+            UpdateMouseAvoidance();
         };
 
         LogDiagnostic("DesktopPetWindow constructed.");
@@ -146,6 +174,14 @@ public partial class DesktopPetWindow : Window
 
         _hotkeyRegistered = RegisterHotKey(
             _windowHandle, HotKeyId, ModifierCtrlAlt, KeyT);
+        _clickThroughHotkeyRegistered = RegisterHotKey(
+            _windowHandle, ClickThroughHotKeyId, ModifierCtrlAlt, KeyI);
+        ApplyClickThroughStyle();
+
+        if (_clickThroughHotkeyRegistered)
+            LogDiagnostic("Global hotkey registered: Ctrl + Alt + I (click-through).");
+        else
+            LogDiagnostic($"Failed to register Ctrl + Alt + I. Win32 error: {Marshal.GetLastWin32Error()}.");
 
         if (_hotkeyRegistered)
         {
@@ -179,6 +215,12 @@ public partial class DesktopPetWindow : Window
             _hotkeyRegistered = false;
         }
 
+        if (_clickThroughHotkeyRegistered && _windowHandle != IntPtr.Zero)
+        {
+            UnregisterHotKey(_windowHandle, ClickThroughHotKeyId);
+            _clickThroughHotkeyRegistered = false;
+        }
+
         _source?.RemoveHook(HwndHook);
         _source = null;
         _windowHandle = IntPtr.Zero;
@@ -191,11 +233,20 @@ public partial class DesktopPetWindow : Window
         IntPtr lParam,
         ref bool handled)
     {
-        if (msg == WmHotKey && wParam.ToInt32() == HotKeyId)
+        if (msg == WmHotKey)
         {
-            LogDiagnostic("Global hotkey pressed: Ctrl + Alt + T.");
-            SendToWeb(new { type = "toggle-toolbar" });
-            handled = true;
+            var id = wParam.ToInt32();
+            if (id == HotKeyId)
+            {
+                LogDiagnostic("Global hotkey pressed: Ctrl + Alt + T.");
+                SendToWeb(new { type = "toggle-toolbar" });
+                handled = true;
+            }
+            else if (id == ClickThroughHotKeyId)
+            {
+                SetClickThrough(!_settings.ClickThroughEnabled, persist: true);
+                handled = true;
+            }
         }
 
         return IntPtr.Zero;
@@ -620,6 +671,76 @@ public partial class DesktopPetWindow : Window
         }
     }
 
+    private void SetClickThrough(bool enabled, bool persist)
+    {
+        _settings = _settings with { ClickThroughEnabled = enabled };
+        ApplyClickThroughStyle();
+        if (persist) SaveSettings();
+        LogDiagnostic($"Click-through mode: {enabled}.");
+    }
+
+    private void ApplyClickThroughStyle()
+    {
+        if (_windowHandle == IntPtr.Zero)
+            return;
+
+        try
+        {
+            var style = GetWindowLongPtr(_windowHandle, GwlExStyle).ToInt64();
+            style |= WsExLayered;
+            if (_settings.ClickThroughEnabled)
+                style |= WsExTransparent;
+            else
+                style &= ~((long)WsExTransparent);
+            SetWindowLongPtr(_windowHandle, GwlExStyle, new IntPtr(style));
+        }
+        catch (Exception ex)
+        {
+            LogDiagnostic($"Could not apply click-through style: {ex.Message}");
+        }
+    }
+
+    private void UpdateMouseAvoidance()
+    {
+        if (!_settings.MouseAvoidanceEnabled || _settings.ClickThroughEnabled || _isClosing)
+        {
+            if (_hiddenForMouseAvoidance) RestoreAfterMouseAvoidance();
+            return;
+        }
+
+        try
+        {
+            var point = System.Windows.Forms.Cursor.Position;
+            var inside = point.X >= Left && point.X < Left + ActualWidth &&
+                         point.Y >= Top && point.Y < Top + ActualHeight;
+            if (inside && IsVisible)
+            {
+                _hiddenForMouseAvoidance = true;
+                _applyingVisibility = true;
+                Hide();
+                _applyingVisibility = false;
+            }
+            else if (!inside && _hiddenForMouseAvoidance)
+            {
+                RestoreAfterMouseAvoidance();
+            }
+        }
+        catch (Exception ex)
+        {
+            LogDiagnostic($"Mouse avoidance error: {ex.Message}");
+        }
+    }
+
+    private void RestoreAfterMouseAvoidance()
+    {
+        if (!_hiddenForMouseAvoidance) return;
+        _hiddenForMouseAvoidance = false;
+        _applyingVisibility = true;
+        Show();
+        Topmost = _settings.AlwaysOnTop;
+        _applyingVisibility = false;
+    }
+
     private void SendSettings()
     {
         LogDiagnostic(
@@ -667,6 +788,9 @@ public partial class DesktopPetWindow : Window
         ApplyWindowPosition();
 
         Topmost = _settings.AlwaysOnTop;
+        ApplyClickThroughStyle();
+        if (!_settings.MouseAvoidanceEnabled && _hiddenForMouseAvoidance)
+            RestoreAfterMouseAvoidance();
 
         SaveSettings();
         SendSettings();
@@ -718,7 +842,7 @@ public partial class DesktopPetWindow : Window
 
     private void PollGlobalMouse()
     {
-        if (!IsVisible || PetWebView.CoreWebView2 is null)
+        if ((!IsVisible && !_hiddenForMouseAvoidance) || PetWebView.CoreWebView2 is null)
             return;
 
         try
