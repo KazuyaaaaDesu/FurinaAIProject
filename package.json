@@ -13,6 +13,8 @@
   "dependencies": {
     "@pixiv/three-vrm": "^3.5.5",
     "@pixiv/three-vrm-animation": "^3.5.5",
+    "discord.js": "^14.27.0",
+    "dotenv": "^18.0.9",
     "pixi-live2d-display": "^0.4.0",
     "pixi.js": "^6.5.10",
     "react": "^19.2.8",

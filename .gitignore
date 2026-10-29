@@ -36,3 +36,9 @@ node_modules/
 
 # Local env files
 .env.local
+
+# Discord bot credentials
+.env
+.env.*
+!.env.example
+discord-bot/.env.example
