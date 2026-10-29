@@ -1,3 +1,4 @@
+
 using System.Linq;
 using System.Windows;
 
@@ -10,6 +11,7 @@ public partial class FufuuControlWindow : Window
     public FufuuControlWindow(DesktopPetWindow petWindow)
     {
         InitializeComponent();
+
         _petWindow = petWindow;
     }
 
@@ -25,21 +27,26 @@ public partial class FufuuControlWindow : Window
 
     private void OnPreferencesClicked(object sender, RoutedEventArgs e)
     {
-        // Check if the preferences window is already open to avoid spamming multiple windows
         var existingWindow = System.Windows.Application.Current.Windows
             .OfType<PetPreferencesWindow>()
             .FirstOrDefault();
 
-        if (existingWindow == null)
+        if (existingWindow is null)
         {
             var preferencesWindow = new PetPreferencesWindow(_petWindow)
             {
                 Owner = this,
             };
+
             preferencesWindow.Show();
         }
         else
         {
+            if (existingWindow.WindowState == WindowState.Minimized)
+            {
+                existingWindow.WindowState = WindowState.Normal;
+            }
+
             existingWindow.Activate();
         }
     }
