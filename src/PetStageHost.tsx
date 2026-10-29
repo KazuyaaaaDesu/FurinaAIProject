@@ -1,5 +1,6 @@
 ﻿
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 import Live2DViewer from "./Live2DViewer";
 import SpriteViewer from "./SpriteViewer";
 import VRMViewer from "./VRMViewer";
@@ -37,6 +38,15 @@ type LumiEmotion =
   | "smug"
   | "surprised"
   | "sparkle";
+
+const DRAG_THRESHOLD = 6;
+
+type PendingPointer = {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  dragging: boolean;
+};
 
 declare global {
   interface Window {
@@ -245,6 +255,7 @@ export default function PetStageHost() {
     useState<StageSettings>(defaults);
 
   const displayModeRef = useRef<DisplayMode>("png");
+  const pendingPointerRef = useRef<PendingPointer | null>(null);
 
   const [status, setStatus] = useState("Loading Lumi...");
   const [speechText, setSpeechText] = useState<string | null>(null);
@@ -393,6 +404,76 @@ export default function PetStageHost() {
     [],
   );
 
+  const cancelPendingDrag = useCallback(() => {
+    pendingPointerRef.current = null;
+  }, []);
+
+  // Record the initial pointer position. Do not start native dragging yet,
+  // because an immediate native drag can prevent double-click recognition.
+  const beginCharacterDrag = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !event.isPrimary) {
+        return;
+      }
+
+      const target = event.target;
+
+      if (
+        target instanceof Element &&
+        target.closest("button, input, select, textarea")
+      ) {
+        return;
+      }
+
+      pendingPointerRef.current = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        dragging: false,
+      };
+    },
+    [],
+  );
+
+  // Start moving the WPF window only when the pointer has actually moved.
+  const handleCharacterPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const pending = pendingPointerRef.current;
+
+      if (
+        !pending ||
+        pending.pointerId !== event.pointerId ||
+        pending.dragging
+      ) {
+        return;
+      }
+
+      const dx = event.clientX - pending.startX;
+      const dy = event.clientY - pending.startY;
+
+      if (Math.hypot(dx, dy) < DRAG_THRESHOLD) {
+        return;
+      }
+
+      pending.dragging = true;
+      pendingPointerRef.current = null;
+
+      post("drag-start");
+    },
+    [],
+  );
+
+  const finishCharacterPointer = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const pending = pendingPointerRef.current;
+
+      if (pending?.pointerId === event.pointerId) {
+        cancelPendingDrag();
+      }
+    },
+    [cancelPendingDrag],
+  );
+
   const geometryChanged = useCallback(
     (_geometry: CharacterScreenGeometry | null) => {
       // Reserved for character geometry updates.
@@ -415,8 +496,6 @@ export default function PetStageHost() {
     walkingSpeed: settings.walkingSpeed,
   };
 
-  // Character X/Y are normalized offsets from the settings UI.
-  // Apply them to the renderer container for PNG, Live2D and VRM.
   const characterPositionStyle = {
     position: "absolute" as const,
     inset: 0,
@@ -430,7 +509,7 @@ export default function PetStageHost() {
       className="pet-stage"
       aria-label="Lumi desktop pet"
       style={{
-        pointerEvents: "none",
+        pointerEvents: "auto",
         width: "100%",
         height: "100%",
         position: "relative",
@@ -467,6 +546,11 @@ export default function PetStageHost() {
       <div
         className="pet-stage__character-position"
         style={characterPositionStyle}
+        onPointerDownCapture={beginCharacterDrag}
+        onPointerMoveCapture={handleCharacterPointerMove}
+        onPointerUpCapture={finishCharacterPointer}
+        onPointerCancelCapture={finishCharacterPointer}
+        onLostPointerCapture={finishCharacterPointer}
       >
         {settings.displayMode === "png" ? (
           <SpriteViewer

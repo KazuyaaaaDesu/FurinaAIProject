@@ -226,6 +226,37 @@ public partial class DesktopPetWindow : Window
         _windowHandle = IntPtr.Zero;
     }
 
+    private void ToggleControlWindow()
+    {
+        try
+        {
+            var existingWindow = System.Windows.Application.Current.Windows
+                .OfType<FufuuControlWindow>()
+                .FirstOrDefault();
+
+            if (existingWindow is not null)
+            {
+                existingWindow.Close();
+                LogDiagnostic("Control window closed using toggle.");
+                return;
+            }
+
+            var controlWindow = new FufuuControlWindow(this)
+            {
+                Owner = this
+            };
+
+            controlWindow.Show();
+            controlWindow.Activate();
+
+            LogDiagnostic("Control window opened using toggle.");
+        }
+        catch (Exception ex)
+        {
+            LogDiagnostic($"Could not toggle control window: {ex}");
+        }
+    }
+
     private IntPtr HwndHook(
         IntPtr hwnd,
         int msg,
@@ -239,7 +270,7 @@ public partial class DesktopPetWindow : Window
             if (id == HotKeyId)
             {
                 LogDiagnostic("Global hotkey pressed: Ctrl + Alt + T.");
-                SendToWeb(new { type = "toggle-toolbar" });
+                Dispatcher.BeginInvoke(new Action(ToggleControlWindow));
                 handled = true;
             }
             else if (id == ClickThroughHotKeyId)
@@ -567,16 +598,34 @@ public partial class DesktopPetWindow : Window
                 case "drag-start":
                     try
                     {
-                        DragMove();
+                        var hwnd = new WindowInteropHelper(this).Handle;
 
-                        // A manual drag establishes a new reference position.
+                        if (hwnd == nint.Zero)
+                        {
+                            LogDiagnostic("Drag start ignored: window handle is unavailable.");
+                            break;
+                        }
+
+                        // Release WebView2's mouse capture and ask Windows
+                        // to treat the pointer as a native window-title-bar drag.
+                        ReleaseCapture();
+                        SendMessage(
+                            hwnd,
+                            WM_NCLBUTTONDOWN,
+                            new nint(HTCAPTION),
+                            nint.Zero
+                        );
+
+                        // Save the new position after the drag completes.
                         _baseLeft = Left;
                         _baseTop = Top;
                         _basePositionInitialized = true;
+
+                        LogDiagnostic("Native window drag started.");
                     }
-                    catch (InvalidOperationException ex)
+                    catch (Exception ex)
                     {
-                        LogDiagnostic($"DragMove ignored: {ex.Message}");
+                        LogDiagnostic($"Native window drag failed: {ex}");
                     }
                     break;
 
@@ -1033,4 +1082,18 @@ public partial class DesktopPetWindow : Window
             // Diagnostics must never crash the pet window.
         }
     }
+
+    private const int WM_NCLBUTTONDOWN = 0x00A1;
+    private const int HTCAPTION = 0x0002;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool ReleaseCapture();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern nint SendMessage(
+        nint hWnd,
+        int msg,
+        nint wParam,
+        nint lParam
+    );
 }
