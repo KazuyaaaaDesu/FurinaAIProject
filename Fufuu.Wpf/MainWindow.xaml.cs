@@ -63,7 +63,7 @@ public partial class MainWindow : Window
 
     private readonly List<ChatMessage> _messages = new();
     private readonly string _systemPrompt;
-    private readonly PiperVoiceService _voice = new();
+    private readonly OmniVoiceService _voice = new();
     private DesktopPetWindow? _desktopPetWindow;
 
     private string _activeSystemPrompt = string.Empty;
@@ -189,19 +189,23 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task SpeakReplyAsync(
-        string text,
-        long voiceId)
+
+    private async Task SpeakReplyAsync(string text, long voiceId)
     {
         try
         {
-            await _voice.SpeakAsync(text, _voiceLanguage);
+            string speechText = PrepareSpeechText(text);
+
+            if (string.IsNullOrWhiteSpace(speechText))
+                return;
+
+            await _voice.SpeakAsync(speechText, _voiceLanguage);
 
             if (!_isClosed &&
                 voiceId == Interlocked.Read(ref _voiceRequestId) &&
                 _voiceEnabled)
             {
-                FooterStatus.Text = "Voice ready � Piper Plus";
+                FooterStatus.Text = "Voice ready - OmniVoice";
             }
         }
         catch (Exception ex)
@@ -217,6 +221,48 @@ public partial class MainWindow : Window
             }
         }
     }
+
+    private static string PrepareSpeechText(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return string.Empty;
+
+        text = System.Text.RegularExpressions.Regex.Replace(
+            text,
+            @"\*([^*]+)\*",
+            match =>
+            {
+                string action = match.Groups[1].Value
+                    .Trim()
+                    .ToLowerInvariant();
+
+                return action switch
+                {
+                    "chuckles" or "chuckle" => "Heh-heh.",
+                    "laughs" or "laugh" => "Ha-ha!",
+                    "giggles" or "giggle" => "Hehe.",
+                    "sighs" or "sigh" => "Sigh...",
+                    "gasps" or "gasp" => "Ah!",
+                    "clears throat" => "Ahem.",
+
+                    // Visual actions should not be spoken.
+                    "smiles" or "smile" => "",
+                    "blushes" or "blush" => "",
+                    "looks away" => "",
+                    "rolls eyes" => "",
+                    "shrugs" or "shrug" => "",
+                    "nods" or "nod" => "",
+
+                    // Unknown stage directions are omitted.
+                    _ => ""
+                };
+            },
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        );
+
+        return text.Trim();
+    }
+
 
     // ------------------------------------------------------------
     // Memory and personality
@@ -1487,7 +1533,7 @@ public partial class MainWindow : Window
         _isClosed = true;
 
         Interlocked.Increment(ref _voiceRequestId);
-        _voice.Stop();
+        _voice.Dispose();
 
         var cancellation = _visionCancellation;
 

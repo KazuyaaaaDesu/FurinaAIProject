@@ -42,3 +42,31 @@ node_modules/
 .env.*
 !.env.example
 discord-bot/.env.example
+
+# OmniVoice - local Python environment and generated data
+omnivoice/.venv/
+omnivoice/hf-cache/
+omnivoice/pip-cache/
+omnivoice/tmp/
+omnivoice/__pycache__/
+omnivoice/**/*.pyc
+
+# OmniVoice - generated test audio
+omnivoice/lumi-anime-*.wav
+omnivoice/lumi-base.wav
+omnivoice/lumi-cloned.wav
+omnivoice/lumi-cold.wav
+omnivoice/lumi-cool.wav
+omnivoice/lumi-elegant-tsundere.wav
+omnivoice/lumi-female.wav
+omnivoice/lumi-kuudere.wav
+omnivoice/lumi-low.wav
+omnivoice/lumi-lower.wav
+omnivoice/lumi-mixed.wav
+omnivoice/lumi-natural.wav
+omnivoice/lumi-no-instruct.wav
+omnivoice/lumi-sharp.wav
+omnivoice/lumi-tsundere.wav
+omnivoice/lumi-verylower.wav
+omnivoice/test.wav
+
