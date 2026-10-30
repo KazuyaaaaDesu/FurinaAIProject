@@ -177,7 +177,7 @@ public partial class MainWindow : Window
         if (_voiceEnabled)
         {
             VoiceButton.Content = "?   Voice: ON";
-            FooterStatus.Text = "Voice enabled � Piper Plus";
+            FooterStatus.Text = "Voice enabled - OmniVoice";
         }
         else
         {
@@ -411,7 +411,7 @@ public partial class MainWindow : Window
                 await Http.GetAsync(OllamaTagsEndpoint);
 
             ConnectionStatus.Text = response.IsSuccessStatusCode
-                ? $"Ollama connected � {ModelName}"
+                ? $"Ollama connected {ModelName}"
                 : "Ollama responded, but needs attention";
 
             ConnectionStatus.Foreground =
@@ -422,7 +422,7 @@ public partial class MainWindow : Window
         catch
         {
             ConnectionStatus.Text =
-                "Ollama offline � start Ollama to chat";
+                "Ollama offline - start Ollama to chat";
 
             ConnectionStatus.Foreground = Brushes.Salmon;
         }
@@ -511,7 +511,7 @@ public partial class MainWindow : Window
             _historyLoaded = true;
 
             FooterStatus.Text =
-                $"Loaded saved history � {savedMessages.Count} messages � " +
+                $"Loaded saved history - {savedMessages.Count} messages - " +
                 $"{_savedMemories.Count} memories";
         }
         catch (Exception ex)
@@ -626,7 +626,7 @@ public partial class MainWindow : Window
         _isCapturingScreen = true;
         CaptureScreenButton.IsEnabled = false;
 
-        FooterStatus.Text = "Capturing primary screen�";
+        FooterStatus.Text = "Capturing primary screen";
 
         try
         {
@@ -642,7 +642,7 @@ public partial class MainWindow : Window
             _pendingScreenshotBase64 = screenshot;
 
             FooterStatus.Text =
-                "Screenshot ready � type a question and send it";
+                "Screenshot ready - type a question and send it";
         }
         catch (Exception ex)
         {
@@ -713,7 +713,7 @@ public partial class MainWindow : Window
         try
         {
             FooterStatus.Text =
-                "Starting Vision Mode � preparing screen capture�";
+                "Starting Vision Mode - preparing screen capture";
 
             // Take a baseline image so the initial screen isn't immediately
             // reported as a new observation.
@@ -739,7 +739,7 @@ public partial class MainWindow : Window
             UpdateVisionButton();
 
             FooterStatus.Text =
-                "Vision Mode ON � local screen observations enabled";
+                "Vision Mode ON - local screen observations enabled";
         }
         catch (Exception ex)
         {
@@ -961,7 +961,7 @@ public partial class MainWindow : Window
                         await SaveMessageAsync("assistant", remark);
 
                         FooterStatus.Text =
-                            "Vision Mode ON � observation added";
+                            "Vision Mode ON - observation added";
                     }
                     catch (Exception ex)
                     {
@@ -973,7 +973,7 @@ public partial class MainWindow : Window
                     // Show the observation in the floating pet's speech bubble.
                     DesktopPetWindow.Instance?.SpeakSequence(remark, 5000);
 
-                    // Play the observation aloud only when Piper is enabled.
+                    // Play the observation aloud only when OmniVoice is enabled.
                     if (_voiceEnabled && !_isClosed)
                     {
                         var voiceId = Interlocked.Increment(
@@ -1152,8 +1152,8 @@ public partial class MainWindow : Window
         MessageInput.Clear();
 
         FooterStatus.Text = screenshot is null
-            ? "Lumi is thinking�"
-            : "Lumi is analyzing your screenshot�";
+            ? "Lumi is thinking"
+            : "Lumi is analyzing your screenshot";
 
         _messages.Add(new ChatMessage("user", text));
 
@@ -1175,7 +1175,7 @@ public partial class MainWindow : Window
 
             replyBlock = AddMessageBubble(
                 "Lumi",
-                "�",
+                "Thinking...",
                 isUser: false);
 
             var recentMessages = _messages
@@ -1301,7 +1301,7 @@ public partial class MainWindow : Window
             if (finalReply.Length == 0)
             {
                 finalReply =
-                    "Hmm� I didn't get a reply that time. Try again?";
+                    "Hmm... I didn't get a reply that time. Try again?";
             }
 
             await SaveMessageAsync("assistant", finalReply);
@@ -1316,13 +1316,13 @@ public partial class MainWindow : Window
             }
 
             FooterStatus.Text = _activeConversationId is null
-                ? $"Temporary chat � {_savedMemories.Count} memories loaded"
-                : $"History saved � {_savedMemories.Count} memories loaded";
+                ? $"Temporary chat - {_savedMemories.Count} memories loaded"
+                : $"History saved - {_savedMemories.Count} memories loaded";
 
             // Display Lumi's reply in the floating desktop pet's speech bubble.
             DesktopPetWindow.Instance?.SpeakSequence(finalReply, 5000);
 
-            // Play audio only when the Piper voice toggle is enabled.
+            // Play audio only when the OmniVoice toggle is enabled.
             if (_voiceEnabled)
             {
                 var voiceId = Interlocked.Increment(
@@ -1469,7 +1469,7 @@ public partial class MainWindow : Window
             isUser: false);
 
         FooterStatus.Text =
-            $"New temporary chat � {_savedMemories.Count} memories loaded.";
+            $"New temporary chat - {_savedMemories.Count} memories loaded.";
 
         MessageInput.Focus();
     }

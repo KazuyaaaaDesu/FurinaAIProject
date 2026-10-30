@@ -1078,7 +1078,7 @@ function ChatApp() {
       messagesRef.current = updatedMessages;
       setMessages(updatedMessages);
 
-      // Speak Ambient Mode comments through Piper Plus when voice is enabled.
+      // Speak Ambient Mode comments through OmniVoice when voice is enabled.
       if (voiceEnabled && window.sakuraDesktop?.speakText) {
         void window.sakuraDesktop
           .speakText(remark)
@@ -1770,7 +1770,7 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
               type="button"
               className="capture-button"
               aria-pressed={voiceEnabled}
-              title="Enable or disable Piper Plus voice for new Lumi replies"
+              title="Enable or disable OmniVoice for new Lumi replies"
               onClick={() => {
                 const nextEnabled = !voiceEnabled;
                 setVoiceEnabled(nextEnabled);
@@ -2087,7 +2087,7 @@ ${relevantMemories.map((memory) => `- ${memory.content}`).join("\n")}
           >
             <div className="voice-options-heading">
               <div>
-                <p className="voice-options-eyebrow">PIPER PLUS</p>
+                <p className="voice-options-eyebrow">OMNIVOICE</p>
                 <h2 id="voice-options-title">Voice options</h2>
               </div>
               <button
