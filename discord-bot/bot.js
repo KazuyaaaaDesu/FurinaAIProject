@@ -1,118 +1,66 @@
-
 import dotenv from "dotenv";
+
 import {
   Client,
   GatewayIntentBits,
   Partials,
 } from "discord.js";
+
+import {
+  configureVoiceAssistant,
+  joinLumiVoice,
+  leaveLumiVoice,
+} from "./voice.js";
+
 import { readFile } from "node:fs/promises";
-import path from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// --------------------------------------------------
-// Paths and environment
-// --------------------------------------------------
+const BOT_DIR = dirname(fileURLToPath(import.meta.url));
+  dotenv.config({ path: join(BOT_DIR, ".env") });
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ROOT = path.resolve(__dirname, "..");
-
-const envResult = dotenv.config({
-  path: path.join(__dirname, ".env"),
-});
-
-if (envResult.error) {
-  throw new Error(
-    "Could not load discord-bot/.env. Make sure the file exists.",
-  );
-}
-
-const TOKEN = process.env.DISCORD_TOKEN;
-const OLLAMA_URL =
-  process.env.OLLAMA_URL ??
-  "http://127.0.0.1:11434/api/chat";
-const MODEL = process.env.OLLAMA_MODEL ?? "llama3.1:latest";
-
-const MAX_HISTORY_MESSAGES = 12;
-const MAX_DISCORD_LENGTH = 1900;
-const MAX_PROMPT_LENGTH = 4000;
-const OLLAMA_TIMEOUT_MS = 120_000;
-
-if (!TOKEN) {
-  throw new Error(
-    "DISCORD_TOKEN is missing from discord-bot/.env.",
-  );
-}
-
-// --------------------------------------------------
-// Load Lumi's existing personality
-// --------------------------------------------------
-
-const personalityPath = path.join(
-  ROOT,
+const PERSONALITY_PATH = join(
+  BOT_DIR,
+  "..",
   "Fufuu.Wpf",
   "Assets",
   "Personality.md",
 );
 
-const personality = await readFile(personalityPath, "utf8");
+const OLLAMA_URL =
+  process.env.OLLAMA_URL ?? "http://127.0.0.1:11434/api/chat";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "llama3.1:latest";
+const MAX_HISTORY_MESSAGES = 20;
 
-// --------------------------------------------------
-// Discord client
-// --------------------------------------------------
+let personality = "You are Lumi, a friendly local AI companion.";
+try {
+  personality = (await readFile(PERSONALITY_PATH, "utf8")).trim() || personality;
+  console.log("[Lumi] Personality loaded.");
+} catch (error) {
+  console.warn("[Lumi] Could not load Personality.md; using fallback personality.", error.message);
+}
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
-  partials: [Partials.Channel],
-});
-
-// Temporary Discord-only history.
-// This does not read or modify WPF conversation history.
 const histories = new Map();
 const busy = new Set();
 
-// --------------------------------------------------
-// Helpers
-// --------------------------------------------------
-
-function splitReply(text) {
+function splitReply(text, maxLength = 1900) {
   const chunks = [];
-  let remaining = text.trim();
+  let remaining = String(text ?? "").trim();
 
-  while (remaining.length > MAX_DISCORD_LENGTH) {
-    let cut = remaining.lastIndexOf(
-      "\n",
-      MAX_DISCORD_LENGTH,
-    );
-
-    if (cut < MAX_DISCORD_LENGTH * 0.5) {
-      cut = remaining.lastIndexOf(
-        " ",
-        MAX_DISCORD_LENGTH,
-      );
-    }
-
-    if (cut < 1) {
-      cut = MAX_DISCORD_LENGTH;
-    }
-
-    chunks.push(remaining.slice(0, cut).trim());
-    remaining = remaining.slice(cut).trim();
+  while (remaining.length > maxLength) {
+    let splitAt = remaining.lastIndexOf("\n", maxLength);
+    if (splitAt < maxLength * 0.5) splitAt = remaining.lastIndexOf(" ", maxLength);
+    if (splitAt < maxLength * 0.5) splitAt = maxLength;
+    chunks.push(remaining.slice(0, splitAt).trim());
+    remaining = remaining.slice(splitAt).trim();
   }
 
-  if (remaining) {
-    chunks.push(remaining);
-  }
-
+  if (remaining) chunks.push(remaining);
   return chunks;
 }
 
-async function askLumi(key, prompt) {
-  const history = histories.get(key) ?? [];
-
+async function askLumi(historyKey, prompt) {
+  const history = histories.get(historyKey) ?? [];
   const messages = [
     { role: "system", content: personality },
     ...history,
@@ -121,14 +69,12 @@ async function askLumi(key, prompt) {
 
   const response = await fetch(OLLAMA_URL, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
+    headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(120_000),
     body: JSON.stringify({
-      model: MODEL,
-      stream: false,
+      model: OLLAMA_MODEL,
       messages,
+      stream: false,
       options: {
         temperature: 0.7,
         top_p: 0.9,
@@ -138,19 +84,15 @@ async function askLumi(key, prompt) {
     }),
   });
 
-  const data = await response.json().catch(() => ({}));
-
   if (!response.ok) {
-    throw new Error(
-      data.error ?? `Ollama returned HTTP ${response.status}.`,
-    );
+    const body = await response.text();
+    throw new Error(`Ollama HTTP ${response.status}: ${body}`);
   }
 
+  const data = await response.json();
   const answer = data.message?.content?.trim();
 
-  if (!answer) {
-    throw new Error("Ollama returned an empty response.");
-  }
+  if (!answer) throw new Error("Ollama returned an empty response.");
 
   const updatedHistory = [
     ...history,
@@ -158,154 +100,88 @@ async function askLumi(key, prompt) {
     { role: "assistant", content: answer },
   ].slice(-MAX_HISTORY_MESSAGES);
 
-  histories.set(key, updatedHistory);
-
+  histories.set(historyKey, updatedHistory);
   return answer;
 }
 
-// --------------------------------------------------
-// Ready event
-// --------------------------------------------------
-
-client.once("clientReady", () => {
-  console.log(`Lumi Discord bot online as ${client.user.tag}`);
-  console.log(`Model: ${MODEL}`);
-  console.log(`Ollama endpoint: ${OLLAMA_URL}`);
-  console.log("Responding only to mentions and !lumi commands.");
-  console.log("Discord history is temporary and separate from WPF.");
-});
-
-// --------------------------------------------------
-// Message handling
-// --------------------------------------------------
-
-client.on("messageCreate", async (message) => {
-  // Ignore bots, including Lumi itself.
-  if (message.author.bot) return;
-
-  // Only operate in server channels for this initial version.
-  if (!message.guild) return;
-
-  const content = message.content.trim();
-
-  const botUser = client.user;
-  if (!botUser) return;
-
-  const mentioned = message.mentions.users.has(botUser.id);
-
-  const commandMatch = /^!lumi(?:\s+([\s\S]*))?$/i.exec(content);
-
-  // Ignore messages that don't mention Lumi or use !lumi.
-  if (!mentioned && !commandMatch) return;
-
-  const mentionPattern = new RegExp(
-    `<@!?${botUser.id}>`,
-    "g",
-  );
-
-  let prompt = commandMatch
-    ? (commandMatch[1] ?? "").trim()
-    : content.replace(mentionPattern, "").trim();
-
-  // Keep each user's history separate per Discord channel.
-  const key = `${message.channelId}:${message.author.id}`;
-
-  // Clear this user's temporary conversation context.
-  if (/^reset$/i.test(prompt)) {
-    histories.delete(key);
-
-    await message.reply({
-      content: "A fresh start! Our Discord conversation context is cleared.",
-      allowedMentions: { repliedUser: false },
-    });
-
-    return;
-  }
-
-  if (!prompt) {
-    await message.reply({
-      content: "Well? You have my attention. What is it?",
-      allowedMentions: { repliedUser: false },
-    });
-
-    return;
-  }
-
-  if (prompt.length > MAX_PROMPT_LENGTH) {
-    await message.reply({
-      content: `Please keep each message under ${MAX_PROMPT_LENGTH} characters.`,
-      allowedMentions: { repliedUser: false },
-    });
-
-    return;
-  }
-
-  if (busy.has(key)) {
-    await message.reply({
-      content: "One moment! I'm still composing my previous reply.",
-      allowedMentions: { repliedUser: false },
-    });
-
-    return;
-  }
-
-  busy.add(key);
-
-  try {
-    await message.channel.sendTyping();
-
-    const answer = await askLumi(key, prompt);
-    const chunks = splitReply(answer);
-
-    if (chunks.length === 0) {
-      await message.reply({
-        content: "I couldn't form a response that time.",
-        allowedMentions: { repliedUser: false },
-      });
-
-      return;
-    }
-
-    // Reply to the triggering message with the first chunk.
-    await message.reply({
-      content: chunks[0],
-      allowedMentions: { repliedUser: false },
-    });
-
-    // Send additional chunks without mentioning anyone.
-    for (const chunk of chunks.slice(1)) {
-      await message.channel.send({
-        content: chunk,
-        allowedMentions: { parse: [] },
-      });
-    }
-  } catch (error) {
-    console.error("Discord response failed:", error);
-
-    await message.reply({
-      content:
-        "I couldn't reach my conversational stage. Check that Ollama is running and the model is available.",
-      allowedMentions: { repliedUser: false },
-    }).catch(() => {});
-  } finally {
-    busy.delete(key);
-  }
-});
-
-// --------------------------------------------------
-// Login and shutdown
-// --------------------------------------------------
-
-client.login(TOKEN).catch((error) => {
-  console.error("Discord login failed:", error);
-  process.exitCode = 1;
-});
-
-async function shutdown() {
-  console.log("Shutting down Lumi Discord bot...");
-  client.destroy();
-  process.exit(0);
+async function handleVoicePrompt(guildId, userId, prompt) {
+  const historyKey = `voice:${guildId}:${userId}`;
+  return askLumi(historyKey, prompt);
 }
 
-process.once("SIGINT", shutdown);
-process.once("SIGTERM", shutdown);
+configureVoiceAssistant(handleVoicePrompt);
+
+const client = new Client({
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildVoiceStates,
+  ],
+  partials: [Partials.Channel],
+});
+
+client.once("ready", () => {
+  console.log(`[Lumi] Online as ${client.user.tag}`);
+  console.log('[Lumi] Voice commands: "!lumi join" and "!lumi leave".');
+});
+
+client.on("messageCreate", async (message) => {
+  if (message.author.bot || !message.guild) return;
+
+  const content = message.content.trim();
+  const isMentioned = message.mentions.has(client.user);
+  const isCommand = /^!lumi\b/i.test(content);
+
+  if (!isMentioned && !isCommand) return;
+
+  const commandText = content.replace(/^!lumi\b/i, "").trim();
+
+  if (isCommand && /^join$/i.test(commandText)) {
+    await joinLumiVoice(message);
+    return;
+  }
+
+  if (isCommand && /^leave$/i.test(commandText)) {
+    await leaveLumiVoice(message);
+    return;
+  }
+
+  if (isCommand && /^reset$/i.test(commandText)) {
+    histories.delete(`text:${message.guild.id}:${message.author.id}`);
+    await message.reply("I've cleared our conversation history.");
+    return;
+  }
+
+  const prompt = isMentioned
+    ? content.replace(new RegExp(`<@!?${client.user.id}>`, "g"), "").trim()
+    : commandText;
+
+  if (!prompt) {
+    await message.reply("I'm here. What would you like to talk about?");
+    return;
+  }
+
+  const historyKey = `text:${message.guild.id}:${message.author.id}`;
+  if (busy.has(historyKey)) {
+    await message.reply("Give me a moment — I'm still thinking about your last message.");
+    return;
+  }
+
+  busy.add(historyKey);
+  try {
+    const answer = await askLumi(historyKey, prompt);
+    for (const chunk of splitReply(answer)) await message.reply(chunk);
+  } catch (error) {
+    console.error("[Lumi] Chat failed:", error);
+    await message.reply("I couldn't get a response from Ollama. Check that Ollama is running and the model is available.");
+  } finally {
+    busy.delete(historyKey);
+  }
+});
+
+if (!process.env.DISCORD_TOKEN) {
+  throw new Error("DISCORD_TOKEN is missing. Add it to discord-bot/.env.");
+}
+
+client.login(process.env.DISCORD_TOKEN);

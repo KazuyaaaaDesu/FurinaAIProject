@@ -70,3 +70,21 @@ omnivoice/lumi-tsundere.wav
 omnivoice/lumi-verylower.wav
 omnivoice/test.wav
 
+# Python virtual environments
+.venv/
+venv/
+**/.venv/
+**/venv/
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+# Speech model caches and downloads
+discord-bot/models/
+discord-bot/cache/
+omnivoice/hf-cache/
+omnivoice/pip-cache/
+omnivoice/tmp/
