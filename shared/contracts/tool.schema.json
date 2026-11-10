@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lumi.local/contracts/tool-v1.schema.json",
+  "title": "Lumi registered read-only tool",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "description",
+    "inputSchema",
+    "readOnly",
+    "allowedClients",
+    "timeoutMs",
+    "maxOutputBytes",
+    "confirmationRequired"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$" },
+    "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "inputSchema": { "type": "object" },
+    "readOnly": { "const": true },
+    "allowedClients": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "enum": ["react", "wpf", "discord"] }
+    },
+    "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 30000 },
+    "maxOutputBytes": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+    "confirmationRequired": { "type": "boolean" }
+  }
+}

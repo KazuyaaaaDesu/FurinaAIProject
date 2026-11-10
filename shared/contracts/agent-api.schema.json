@@ -1,0 +1,430 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lumi.local/contracts/agent-api-v1.schema.json",
+  "title": "Lumi Agent API v1",
+  "description": "JSON request and response contracts for the additive Lumi agent API.",
+  "$defs": {
+    "clientId": {
+      "type": "string",
+      "enum": ["react", "wpf", "discord"]
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["chat", "voice", "ambient", "vision"]
+    },
+    "opaqueId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "requestId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "historyMessage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "content"],
+      "properties": {
+        "role": { "type": "string", "enum": ["user", "assistant"] },
+        "content": { "type": "string", "maxLength": 20000 }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mimeType", "data"],
+      "properties": {
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/jpeg", "image/png", "image/webp"]
+        },
+        "data": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1398102,
+          "contentEncoding": "base64"
+        }
+      }
+    },
+    "chatRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requestId",
+        "clientId",
+        "channel",
+        "sessionId",
+        "history",
+        "message"
+      ],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "clientId": { "$ref": "#/$defs/clientId" },
+        "channel": { "$ref": "#/$defs/channel" },
+        "conversationId": { "$ref": "#/$defs/opaqueId" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "history": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/$defs/historyMessage" }
+        },
+        "message": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text"],
+          "properties": {
+            "text": { "type": "string", "maxLength": 20000 },
+            "images": {
+              "type": "array",
+              "maxItems": 1,
+              "items": { "$ref": "#/$defs/image" }
+            }
+          }
+        },
+        "activeSkillIds": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" }
+        }
+      }
+    },
+    "chatResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "requestId",
+        "sessionId",
+        "clientId",
+        "status",
+        "message",
+        "model",
+        "finishReason"
+      ],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "conversationId": { "$ref": "#/$defs/opaqueId" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "clientId": { "$ref": "#/$defs/clientId" },
+        "status": { "const": "completed" },
+        "message": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["role", "content"],
+          "properties": {
+            "role": { "const": "assistant" },
+            "content": { "type": "string" }
+          }
+        },
+        "model": { "type": "string" },
+        "finishReason": { "type": "string", "enum": ["stop", "length", "unknown"] },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "emotionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "clientId", "sessionId", "text"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "clientId": { "const": "react" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "text": { "type": "string", "maxLength": 20000 }
+      }
+    },
+    "emotionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "clientId", "sessionId", "emotion"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "clientId": { "const": "react" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "emotion": {
+          "type": "string",
+          "enum": ["neutral", "happy", "pout", "shy", "smug", "surprised", "sparkle"]
+        }
+      }
+    },
+    "healthResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "status", "service", "capabilities"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "status": { "const": "ok" },
+        "service": { "const": "lumi-agent-api" },
+        "capabilities": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["chat", "streaming", "vision", "emotion", "cancellation", "skills", "registeredTools"],
+          "properties": {
+            "chat": { "const": true },
+            "streaming": { "const": true },
+            "vision": { "const": true },
+            "emotion": { "const": true },
+            "cancellation": { "const": true },
+            "skills": { "const": true },
+            "registeredTools": { "const": true }
+          }
+        }
+      }
+    },
+    "capabilitiesResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "clients", "features", "limits"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "clients": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "channels"],
+            "properties": {
+              "id": { "$ref": "#/$defs/clientId" },
+              "channels": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "$ref": "#/$defs/channel" }
+              }
+            }
+          }
+        },
+        "features": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["chat", "streaming", "vision", "emotion", "cancellation", "skills", "registeredTools"],
+          "properties": {
+            "chat": { "const": true },
+            "streaming": { "const": true },
+            "vision": { "const": true },
+            "emotion": { "const": true },
+            "cancellation": { "const": true },
+            "skills": { "const": true },
+            "registeredTools": { "const": true }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["maxBodyBytes", "maxImageBytes", "requestTimeoutMs"],
+          "properties": {
+            "maxBodyBytes": { "type": "integer", "minimum": 1 },
+            "maxImageBytes": { "type": "integer", "minimum": 1 },
+            "requestTimeoutMs": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "skillSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "description", "requiredToolIds", "allowed"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "requiredToolIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$" }
+        },
+        "allowed": { "type": "boolean" }
+      }
+    },
+    "skillDiscoveryResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "skills"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "skills": { "type": "array", "items": { "$ref": "#/$defs/skillSummary" } }
+      }
+    },
+    "cancelRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clientId", "sessionId"],
+      "properties": {
+        "clientId": { "$ref": "#/$defs/clientId" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" }
+      }
+    },
+    "cancelResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "status"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "status": { "const": "cancellation_requested" }
+      }
+    },
+    "skillActivationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clientId", "sessionId", "enabled"],
+      "properties": {
+        "clientId": { "$ref": "#/$defs/clientId" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "skillActivationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "skill"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "skill": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "enabled", "requiredToolIds"],
+          "properties": {
+            "id": { "type": "string", "pattern": "^[a-z0-9-]{1,64}$" },
+            "enabled": { "type": "boolean" },
+            "requiredToolIds": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$" }
+            }
+          }
+        }
+      }
+    },
+    "toolDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description",
+        "inputSchema",
+        "readOnly",
+        "allowedClients",
+        "timeoutMs",
+        "confirmationRequired"
+      ],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$" },
+        "description": { "type": "string" },
+        "inputSchema": { "type": "object" },
+        "readOnly": { "const": true },
+        "allowedClients": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/clientId" }
+        },
+        "timeoutMs": { "type": "integer", "minimum": 1 },
+        "confirmationRequired": { "type": "boolean" }
+      }
+    },
+    "toolDiscoveryResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "tools"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/toolDefinition" } }
+      }
+    },
+    "toolInvocationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "clientId", "sessionId", "arguments"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "clientId": { "$ref": "#/$defs/clientId" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "arguments": { "type": "object" },
+        "authorization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "confirmed": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "toolInvocationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "toolId", "status", "result"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "toolId": { "type": "string", "pattern": "^[a-z][a-z0-9._-]{1,63}$" },
+        "status": { "const": "completed" },
+        "result": { "type": "object" }
+      }
+    },
+    "sseMetaEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "sessionId", "clientId", "model"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "conversationId": { "$ref": "#/$defs/opaqueId" },
+        "sessionId": { "$ref": "#/$defs/opaqueId" },
+        "clientId": { "$ref": "#/$defs/clientId" },
+        "model": { "type": "string" }
+      }
+    },
+    "sseDeltaEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requestId", "text"],
+      "properties": {
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "text": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sseTerminalEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "status"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "status": { "enum": ["completed", "cancelled"] },
+        "finishReason": { "enum": ["stop", "length", "unknown"] },
+        "warnings": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "sseErrorEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "requestId", "error"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "requestId": { "$ref": "#/$defs/requestId" },
+        "error": { "$ref": "#/$defs/errorResponse/properties/error" }
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "error"],
+      "properties": {
+        "apiVersion": { "const": "1.0" },
+        "error": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "details": { "type": "object" }
+          }
+        }
+      }
+    }
+  }
+}
