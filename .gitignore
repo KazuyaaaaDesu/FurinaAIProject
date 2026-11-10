@@ -88,3 +88,4 @@ discord-bot/cache/
 omnivoice/hf-cache/
 omnivoice/pip-cache/
 omnivoice/tmp/
+data/conversations.json

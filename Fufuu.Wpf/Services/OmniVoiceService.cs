@@ -1,3 +1,4 @@
+
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -17,26 +18,48 @@ public sealed class OmniVoiceService : IDisposable
     private const string ServerScript = @"D:\AI\LocalCompanion\omnivoice\omnivoice_server.py";
     private const string BaseUrl = "http://127.0.0.1:8765";
 
-    // Keep chunks large enough for natural prosody, but small enough to reduce
-    // the time before the first audio is ready.
-    private const int MaxChunkCharacters = 260;
+    private const string VoiceActionDirectory =
+        @"D:\AI\LocalCompanion\omnivoice\voice-actions";
 
-    private static readonly HttpClient Http = new() { Timeout = Timeout.InfiniteTimeSpan };
+    private const int MaxChunkCharacters = 260;
+    private const int ActionPauseMilliseconds = 700;
+
+    private static readonly HttpClient Http = new()
+    {
+        Timeout = Timeout.InfiniteTimeSpan
+    };
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly object _sync = new();
+
     private CancellationTokenSource? _activeSpeech;
     private Process? _serverProcess;
     private bool _disposed;
 
-    public async Task SpeakAsync(string text, string language = "auto", double rate = 0.65)
+    private sealed class SpeechSegment
     {
-        text = CleanText(text);
+        public string Type { get; init; } = "";
+        public string Value { get; init; } = "";
+    }
+
+    public async Task SpeakAsync(
+        string text,
+        string language = "auto",
+        double rate = 0.65)
+    {
         if (string.IsNullOrWhiteSpace(text))
             return;
+
+        // Preserve the original overall text limit.
+        text = text.Length > 1200 ? text[..1200] : text;
+
+        // Parse stage directions BEFORE cleaning Markdown.
+        List<SpeechSegment> segments = ParseSpeechSegments(text);
 
         Stop();
 
         var cancellation = new CancellationTokenSource();
+
         lock (_sync)
         {
             if (_disposed)
@@ -49,6 +72,7 @@ public sealed class OmniVoiceService : IDisposable
         }
 
         var entered = false;
+
         try
         {
             await _gate.WaitAsync(cancellation.Token);
@@ -56,57 +80,50 @@ public sealed class OmniVoiceService : IDisposable
 
             await EnsureServerAsync(cancellation.Token);
 
-            List<string> chunks = SplitIntoChunks(text, MaxChunkCharacters);
-            if (chunks.Count == 0)
-                return;
-
-            // Generate chunk 1. Once it is ready, request chunk 2 before
-            // playing chunk 1. GPU synthesis and WAV playback then overlap.
-            string? currentWav = await GenerateWavAsync(chunks[0], cancellation.Token);
-
-            try
+            foreach (SpeechSegment segment in segments)
             {
-                for (int i = 0; i < chunks.Count; i++)
+                cancellation.Token.ThrowIfCancellationRequested();
+
+                switch (segment.Type)
                 {
-                    cancellation.Token.ThrowIfCancellationRequested();
-
-                    Task<string?>? nextGeneration = null;
-                    if (i + 1 < chunks.Count)
-                    {
-                        nextGeneration = GenerateWavAsync(
-                            chunks[i + 1],
+                    case "text":
+                        await SpeakTextSegmentAsync(
+                            segment.Value,
                             cancellation.Token);
-                    }
+                        break;
 
-                    if (currentWav is not null)
-                    {
-                        try
+                    case "action":
                         {
-                            await PlayWavAsync(currentWav, cancellation.Token);
-                        }
-                        finally
-                        {
-                            TryDelete(currentWav);
-                        }
-                    }
+                            string path = Path.Combine(
+                                VoiceActionDirectory,
+                                segment.Value);
 
-                    currentWav = null;
+                            if (File.Exists(path))
+                            {
+                                await PlayWavAsync(
+                                    path,
+                                    cancellation.Token);
+                            }
+                            else
+                            {
+                                Debug.WriteLine(
+                                    $"[Lumi Voice] Missing action clip: {path}");
+                            }
 
-                    if (nextGeneration is not null)
-                    {
-                        currentWav = await nextGeneration;
-                    }
+                            break;
+                        }
+
+                    case "pause":
+                        await Task.Delay(
+                            ActionPauseMilliseconds,
+                            cancellation.Token);
+                        break;
                 }
-            }
-            finally
-            {
-                if (currentWav is not null)
-                    TryDelete(currentWav);
             }
         }
         catch (OperationCanceledException)
         {
-            // Expected when the user stops speech or starts a newer reply.
+            // Expected when speech is interrupted.
         }
         finally
         {
@@ -123,11 +140,79 @@ public sealed class OmniVoiceService : IDisposable
         }
     }
 
-    private async Task<string?> GenerateWavAsync(string text, CancellationToken token)
+    private async Task SpeakTextSegmentAsync(
+        string text,
+        CancellationToken token)
+    {
+        text = CleanText(text);
+
+        if (string.IsNullOrWhiteSpace(text))
+            return;
+
+        List<string> chunks = SplitIntoChunks(
+            text,
+            MaxChunkCharacters);
+
+        if (chunks.Count == 0)
+            return;
+
+        // Generate the first chunk.
+        string? currentWav = await GenerateWavAsync(
+            chunks[0],
+            token);
+
+        try
+        {
+            for (int i = 0; i < chunks.Count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+
+                Task<string?>? nextGeneration = null;
+
+                // Generate the next chunk while the current one plays.
+                if (i + 1 < chunks.Count)
+                {
+                    nextGeneration = GenerateWavAsync(
+                        chunks[i + 1],
+                        token);
+                }
+
+                if (currentWav is not null)
+                {
+                    try
+                    {
+                        await PlayWavAsync(
+                            currentWav,
+                            token);
+                    }
+                    finally
+                    {
+                        TryDelete(currentWav);
+                    }
+                }
+
+                currentWav = null;
+
+                if (nextGeneration is not null)
+                    currentWav = await nextGeneration;
+            }
+        }
+        finally
+        {
+            if (currentWav is not null)
+                TryDelete(currentWav);
+        }
+    }
+
+    private async Task<string?> GenerateWavAsync(
+        string text,
+        CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, BaseUrl + "/synthesize")
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            BaseUrl + "/synthesize")
         {
             Content = new StringContent(
                 JsonSerializer.Serialize(new { text }),
@@ -143,11 +228,13 @@ public sealed class OmniVoiceService : IDisposable
         if (!response.IsSuccessStatusCode)
         {
             var error = await response.Content.ReadAsStringAsync(token);
+
             throw new InvalidOperationException(
                 $"OmniVoice service returned {(int)response.StatusCode}: {error}");
         }
 
         byte[] wav = await response.Content.ReadAsByteArrayAsync(token);
+
         token.ThrowIfCancellationRequested();
 
         string path = Path.Combine(
@@ -159,7 +246,8 @@ public sealed class OmniVoiceService : IDisposable
             await File.WriteAllBytesAsync(path, wav, token);
 
             if (new FileInfo(path).Length <= 44)
-                throw new InvalidOperationException("OmniVoice returned an invalid WAV.");
+                throw new InvalidOperationException(
+                    "OmniVoice returned an invalid WAV.");
 
             return path;
         }
@@ -183,10 +271,14 @@ public sealed class OmniVoiceService : IDisposable
             if (_serverProcess is not { HasExited: false })
             {
                 if (!File.Exists(PythonPath))
-                    throw new FileNotFoundException("Python not found", PythonPath);
+                    throw new FileNotFoundException(
+                        "Python not found",
+                        PythonPath);
 
                 if (!File.Exists(ServerScript))
-                    throw new FileNotFoundException("OmniVoice server script not found", ServerScript);
+                    throw new FileNotFoundException(
+                        "OmniVoice server script not found",
+                        ServerScript);
 
                 _serverProcess = Process.Start(new ProcessStartInfo
                 {
@@ -196,11 +288,13 @@ public sealed class OmniVoiceService : IDisposable
                     CreateNoWindow = true,
                     WindowStyle = ProcessWindowStyle.Hidden,
                     ArgumentList = { ServerScript }
-                }) ?? throw new InvalidOperationException("Could not start OmniVoice service.");
+                }) ?? throw new InvalidOperationException(
+                    "Could not start OmniVoice service.");
             }
         }
 
         var deadline = DateTime.UtcNow.AddMinutes(5);
+
         while (DateTime.UtcNow < deadline)
         {
             token.ThrowIfCancellationRequested();
@@ -214,29 +308,38 @@ public sealed class OmniVoiceService : IDisposable
                 {
                     int code = process.ExitCode;
                     _serverProcess = null;
+
                     throw new InvalidOperationException(
-                        $"OmniVoice service exited with code {code}. Run the Python script manually to inspect startup errors.");
+                        $"OmniVoice service exited with code {code}. " +
+                        "Run the Python script manually to inspect startup errors.");
                 }
             }
 
             await Task.Delay(1000, token);
         }
 
-        throw new TimeoutException("OmniVoice did not become ready within five minutes.");
+        throw new TimeoutException(
+            "OmniVoice did not become ready within five minutes.");
     }
 
-    private static async Task<bool> IsReadyAsync(CancellationToken token)
+    private static async Task<bool> IsReadyAsync(
+        CancellationToken token)
     {
         try
         {
-            using var response = await Http.GetAsync(BaseUrl + "/health", token);
+            using var response = await Http.GetAsync(
+                BaseUrl + "/health",
+                token);
+
             if (!response.IsSuccessStatusCode)
                 return false;
 
             using var document = JsonDocument.Parse(
                 await response.Content.ReadAsStringAsync(token));
 
-            return document.RootElement.TryGetProperty("status", out var status)
+            return document.RootElement.TryGetProperty(
+                "status",
+                out var status)
                 && status.GetString() == "ready";
         }
         catch (HttpRequestException)
@@ -252,6 +355,7 @@ public sealed class OmniVoiceService : IDisposable
     public void Stop()
     {
         CancellationTokenSource? active;
+
         lock (_sync)
             active = _activeSpeech;
 
@@ -261,11 +365,13 @@ public sealed class OmniVoiceService : IDisposable
         }
         catch (ObjectDisposedException)
         {
-            // The speech operation completed at the same time.
+            // Speech completed at the same time.
         }
     }
 
-    private static async Task PlayWavAsync(string wavPath, CancellationToken token)
+    private static async Task PlayWavAsync(
+        string wavPath,
+        CancellationToken token)
     {
         string script =
             "$ErrorActionPreference = 'Stop'; " +
@@ -273,7 +379,8 @@ public sealed class OmniVoiceService : IDisposable
             wavPath.Replace("'", "''") +
             "'); try { $p.Load(); $p.PlaySync() } finally { $p.Dispose() }";
 
-        string encoded = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+        string encoded = Convert.ToBase64String(
+            Encoding.Unicode.GetBytes(script));
 
         using var process = new Process
         {
@@ -283,21 +390,32 @@ public sealed class OmniVoiceService : IDisposable
                 UseShellExecute = false,
                 CreateNoWindow = true,
                 RedirectStandardError = true,
-                ArgumentList = { "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded }
+                ArgumentList =
+                {
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-EncodedCommand",
+                    encoded
+                }
             }
         };
 
         try
         {
             if (!process.Start())
-                throw new InvalidOperationException("WAV playback could not start.");
+                throw new InvalidOperationException(
+                    "WAV playback could not start.");
 
-            Task<string> stderrTask = process.StandardError.ReadToEndAsync();
+            Task<string> stderrTask =
+                process.StandardError.ReadToEndAsync();
+
             await process.WaitForExitAsync(token);
+
             string stderr = await stderrTask;
 
             if (process.ExitCode != 0)
-                throw new InvalidOperationException("WAV playback failed: " + stderr);
+                throw new InvalidOperationException(
+                    "WAV playback failed: " + stderr);
         }
         catch (OperationCanceledException)
         {
@@ -308,21 +426,115 @@ public sealed class OmniVoiceService : IDisposable
             }
             catch
             {
-                // Best-effort termination of playback.
+                // Best-effort playback termination.
             }
 
             throw;
         }
     }
 
-    private static List<string> SplitIntoChunks(string text, int maxCharacters)
+    private static List<SpeechSegment> ParseSpeechSegments(string text)
+    {
+        var segments = new List<SpeechSegment>();
+
+        var pattern = new Regex(
+            @"(?:\*{1,2}\s*(?<star>soft\s+sigh|tired\s+sigh|giggles?|laughs?|chuckles?|sighs?|groans?|gasps?|hmm|pauses?)\s*\*{1,2}|\[\s*(?<bracket>soft\s+sigh|tired\s+sigh|giggles?|laughs?|chuckles?|sighs?|groans?|gasps?|hmm|pauses?)\s*\])",
+            RegexOptions.IgnoreCase);
+
+        int position = 0;
+
+        foreach (Match match in pattern.Matches(text))
+        {
+            if (match.Index > position)
+            {
+                string spoken = text.Substring(
+                    position,
+                    match.Index - position);
+
+                if (!string.IsNullOrWhiteSpace(spoken))
+                {
+                    segments.Add(new SpeechSegment
+                    {
+                        Type = "text",
+                        Value = spoken
+                    });
+                }
+            }
+
+            string cue = (
+                match.Groups["star"].Success
+                    ? match.Groups["star"].Value
+                    : match.Groups["bracket"].Value
+            ).ToLowerInvariant();
+
+            string? clip = cue switch
+            {
+                "giggle" or "giggles" => "nervous-giggle.wav",
+                "laugh" or "laughs" => "hearty-laugh.wav",
+                "chuckle" or "chuckles" => "chuckle.wav",
+                "sigh" or "sighs" => "relieved-sigh.wav",
+                "soft sigh" => "soft-sigh.wav",
+                "tired sigh" => "tired-sigh.wav",
+                "groan" or "groans" => "frustrated-groan.wav",
+                "gasp" or "gasps" => "surprised-gasp.wav",
+                "hmm" => "confused-hmm.wav",
+                _ => null
+            };
+
+            if (cue == "pause" || cue == "pauses")
+            {
+                segments.Add(new SpeechSegment
+                {
+                    Type = "pause"
+                });
+            }
+            else if (clip is not null)
+            {
+                segments.Add(new SpeechSegment
+                {
+                    Type = "action",
+                    Value = clip
+                });
+            }
+
+            position = match.Index + match.Length;
+        }
+
+        if (position < text.Length)
+        {
+            string remaining = text[position..];
+
+            if (!string.IsNullOrWhiteSpace(remaining))
+            {
+                segments.Add(new SpeechSegment
+                {
+                    Type = "text",
+                    Value = remaining
+                });
+            }
+        }
+
+        if (segments.Count == 0 && !string.IsNullOrWhiteSpace(text))
+        {
+            segments.Add(new SpeechSegment
+            {
+                Type = "text",
+                Value = text
+            });
+        }
+
+        return segments;
+    }
+
+    private static List<string> SplitIntoChunks(
+        string text,
+        int maxCharacters)
     {
         var chunks = new List<string>();
+
         if (string.IsNullOrWhiteSpace(text))
             return chunks;
 
-        // Prefer sentence boundaries. If a single sentence is too long,
-        // split at clause punctuation, then at the nearest word boundary.
         string[] sentences = Regex.Split(
             text,
             @"(?<=[.!?])\s+(?=[\p{Lu}\d""'])");
@@ -332,6 +544,7 @@ public sealed class OmniVoiceService : IDisposable
         foreach (string rawSentence in sentences)
         {
             string sentence = rawSentence.Trim();
+
             if (sentence.Length == 0)
                 continue;
 
@@ -343,14 +556,22 @@ public sealed class OmniVoiceService : IDisposable
                     current.Clear();
                 }
 
-                foreach (string part in SplitLongSentence(sentence, maxCharacters))
+                foreach (string part in SplitLongSentence(
+                    sentence,
+                    maxCharacters))
+                {
                     chunks.Add(part);
+                }
 
                 continue;
             }
 
-            int extraLength = current.Length == 0 ? sentence.Length : sentence.Length + 1;
-            if (current.Length > 0 && current.Length + extraLength > maxCharacters)
+            int extraLength = current.Length == 0
+                ? sentence.Length
+                : sentence.Length + 1;
+
+            if (current.Length > 0 &&
+                current.Length + extraLength > maxCharacters)
             {
                 chunks.Add(current.ToString().Trim());
                 current.Clear();
@@ -368,14 +589,20 @@ public sealed class OmniVoiceService : IDisposable
         return chunks;
     }
 
-    private static IEnumerable<string> SplitLongSentence(string sentence, int maxCharacters)
+    private static IEnumerable<string> SplitLongSentence(
+        string sentence,
+        int maxCharacters)
     {
-        string[] clauses = Regex.Split(sentence, @"(?<=[,;:])\s+");
+        string[] clauses = Regex.Split(
+            sentence,
+            @"(?<=[,;:])\s+");
+
         var current = new StringBuilder();
 
         foreach (string rawClause in clauses)
         {
             string clause = rawClause.Trim();
+
             if (clause.Length == 0)
                 continue;
 
@@ -388,13 +615,18 @@ public sealed class OmniVoiceService : IDisposable
                 }
 
                 string remaining = clause;
+
                 while (remaining.Length > maxCharacters)
                 {
-                    int splitAt = remaining.LastIndexOf(' ', maxCharacters);
+                    int splitAt = remaining.LastIndexOf(
+                        ' ',
+                        maxCharacters);
+
                     if (splitAt < maxCharacters / 2)
                         splitAt = maxCharacters;
 
                     yield return remaining[..splitAt].Trim();
+
                     remaining = remaining[splitAt..].Trim();
                 }
 
@@ -404,8 +636,12 @@ public sealed class OmniVoiceService : IDisposable
                 continue;
             }
 
-            int needed = current.Length == 0 ? clause.Length : clause.Length + 1;
-            if (current.Length > 0 && current.Length + needed > maxCharacters)
+            int needed = current.Length == 0
+                ? clause.Length
+                : clause.Length + 1;
+
+            if (current.Length > 0 &&
+                current.Length + needed > maxCharacters)
             {
                 yield return current.ToString().Trim();
                 current.Clear();
@@ -427,12 +663,68 @@ public sealed class OmniVoiceService : IDisposable
             return string.Empty;
 
         text = text.Trim();
-        text = Regex.Replace(text, @"```[\s\S]*?```", " ");
-        text = Regex.Replace(text, @"`([^`]+)`", "$1");
-        text = Regex.Replace(text, @"https?://\S+", "link");
-        text = Regex.Replace(text, @"\s+", " ");
 
-        return text.Length > 1200 ? text[..1200] : text;
+        // Remove Markdown code blocks.
+        text = Regex.Replace(
+            text,
+            @"```[\s\S]*?```",
+            " ");
+
+        text = Regex.Replace(
+            text,
+            @"`([^`]+)`",
+            "$1");
+
+        // Keep link labels, not URLs.
+        text = Regex.Replace(
+            text,
+            @"\[([^\]]+)\]\([^)]+\)",
+            "$1");
+
+        text = Regex.Replace(
+            text,
+            @"https?://\S+",
+            "link");
+
+        // Remove Markdown headings, quotes and list markers.
+        text = Regex.Replace(
+            text,
+            @"^#{1,6}\s+",
+            "",
+            RegexOptions.Multiline);
+
+        text = Regex.Replace(
+            text,
+            @"^\s*>\s?",
+            "",
+            RegexOptions.Multiline);
+
+        text = Regex.Replace(
+            text,
+            @"^\s*[-+]\s+",
+            "",
+            RegexOptions.Multiline);
+
+        text = Regex.Replace(
+            text,
+            @"^\s*\d+\.\s+",
+            "",
+            RegexOptions.Multiline);
+
+        // Remove bold, italic and strikethrough markers.
+        text = Regex.Replace(
+            text,
+            @"\*\*|__|~~|[*_]",
+            "");
+
+        text = Regex.Replace(
+            text,
+            @"\s+",
+            " ").Trim();
+
+        return text.Length > 1200
+            ? text[..1200]
+            : text;
     }
 
     private static void TryDelete(string path)
